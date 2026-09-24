@@ -1,4 +1,4 @@
-# my-better-t-app
+# helpdeskAI
 
 This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines SvelteKit, Self, and more.
 
@@ -43,7 +43,7 @@ Run standalone Node/Bun tools that use Varlock from the owning app directory so 
 ## Project Structure
 
 ```
-my-better-t-app/
+helpdeskAI/
 ├── apps/
 │   └── web/         # Fullstack application (SvelteKit)
 ├── packages/

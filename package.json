@@ -1,5 +1,5 @@
 {
-  "name": "my-better-t-app",
+  "name": "helpdeskai",
   "private": true,
   "workspaces": {
     "packages": [
@@ -27,7 +27,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@my-better-t-app/config": "workspace:*",
+    "@helpdeskai/config": "workspace:*",
     "@types/node": "^26.4.1",
     "oxfmt": "latest",
     "oxlint": "latest",
