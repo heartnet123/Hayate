@@ -1,14 +1,16 @@
 <script lang="ts">
-	const messages = [
-		{ avatar: 'priya', body: "My VPN keeps disconnecting every few minutes. I can't access internal tools...", channel: '#it-support', id: 1, name: 'Priya Desai', time: '10:24 AM' },
-		{ avatar: 'daniel', body: 'Can I get access to the Figma Pro plan for our design team?', channel: '#it-support', id: 2, name: 'Daniel Kim', time: '9:56 AM' },
+	let { data } = $props();
+	let supportChannel = $derived(data.slack?.channel ?? '#it-support');
+	let messages = $derived([
+		{ avatar: 'priya', body: "My VPN keeps disconnecting every few minutes. I can't access internal tools...", channel: supportChannel, id: 1, name: 'Priya Desai', time: '10:24 AM' },
+		{ avatar: 'daniel', body: 'Can I get access to the Figma Pro plan for our design team?', channel: supportChannel, id: 2, name: 'Daniel Kim', time: '9:56 AM' },
 		{ avatar: 'marcus', body: "My laptop is running very slow since today's update. Any ideas?", channel: '#general', id: 3, name: 'Marcus Lee', time: '9:41 AM' },
-		{ avatar: 'emily', body: "I'm getting an error when trying to access the production environment.", channel: '#it-support', id: 4, name: 'Emily Carter', time: '9:12 AM' },
+		{ avatar: 'emily', body: "I'm getting an error when trying to access the production environment.", channel: supportChannel, id: 4, name: 'Emily Carter', time: '9:12 AM' },
 		{ avatar: 'alex', body: 'Requesting additional Slack channels for the new project.', channel: '#engineering', id: 5, name: 'Alex Rivera', time: '8:50 AM' },
-		{ avatar: 'sarah', body: 'My monitor stopped working after the latest macOS update.', channel: '#it-support', id: 6, name: 'Sarah Wong', time: '8:33 AM' },
+		{ avatar: 'sarah', body: 'My monitor stopped working after the latest macOS update.', channel: supportChannel, id: 6, name: 'Sarah Wong', time: '8:33 AM' },
 		{ avatar: 'james', body: 'Can someone help me reset my Okta password?', channel: '#hr', id: 7, name: 'James Park', time: '7:18 AM' },
-		{ avatar: 'olivia', body: "I'm traveling next week — do I need a VPN for international travel?", channel: '#it-support', id: 8, name: 'Olivia Martin', time: '6:42 AM' }
-	];
+		{ avatar: 'olivia', body: "I'm traveling next week — do I need a VPN for international travel?", channel: supportChannel, id: 8, name: 'Olivia Martin', time: '6:42 AM' }
+	]);
 
 	const initialConversation = [
 		{ avatar: 'priya', body: "My VPN keeps disconnecting every few minutes. I can't access internal tools and it's blocking my work. 🙂\n\nThis started this morning. Anyone else seeing this?", name: 'Priya Desai', time: '10:24 AM' },
@@ -45,7 +47,7 @@
 </svelte:head>
 
 <main id="main-content" class="dashboard">
-	<div class="page-heading ui-page-heading"><div><h1>Slack Intake</h1><p>Sample messages and triage. Replies and tickets stay in this preview; no Slack connection.</p></div><a class="settings-button ui-button" href="/settings/slack"><span aria-hidden="true">⚙</span> Slack Settings</a></div>
+	<div class="page-heading ui-page-heading"><div><h1>Slack Intake</h1><p>{data.slack?.workspace ? `Active workspace: ${data.slack.workspace} · Support channel: ${data.slack.channel}.` : 'No Slack workspace configured.'} Sample messages and triage stay in this preview.</p></div>{#if data.user?.role === 'admin'}<a class="settings-button ui-button" href="/settings/slack"><span aria-hidden="true">⚙</span> Slack Settings</a>{/if}</div>
 
 	<section class="metric-grid" aria-label="Slack intake metrics">
 		{#each metrics as metric}
@@ -55,7 +57,7 @@
 
 	<div class="intake-grid">
 		<section class="panel ui-panel inbox-panel">
-			<div class="inbox-heading"><h2>Incoming Messages</h2><span class="live-pill ui-badge">Sample</span><label class="channel-select"><select class="ui-field" aria-label="Filter messages by channel" bind:value={selectedChannel} onchange={() => { replyDraft = ''; replyNotice = ''; ticketCreated = false; }}><option>All channels</option><option>#it-support</option><option>#general</option><option>#engineering</option><option>#hr</option></select></label></div>
+			<div class="inbox-heading"><h2>Incoming Messages</h2><span class="live-pill ui-badge">Sample</span><label class="channel-select"><select class="ui-field" aria-label="Filter messages by channel" bind:value={selectedChannel} onchange={() => { replyDraft = ''; replyNotice = ''; ticketCreated = false; }}><option>All channels</option><option>{supportChannel}</option><option>#general</option><option>#engineering</option><option>#hr</option></select></label></div>
 			<div class="message-list">
 				{#each visibleMessages as message (message.id)}
 					<button type="button" class="message-row" aria-pressed={activeMessage.id === message.id} class:selected={activeMessage.id === message.id} onclick={() => { selectedId = message.id; ticketCreated = false; replyDraft = ''; replyNotice = ''; }}>

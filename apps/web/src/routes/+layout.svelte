@@ -23,7 +23,7 @@
 	<header class="topbar">
 		<a class="brand" href="/" aria-label="HelpDesk AI home"><span class="brand-mark">✦</span><span>HelpDesk AI</span></a>
 		<div class="search-wrap" role="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.4" /><path d="m16 16 4.2 4.2" /></svg><span>Search preview unavailable</span></div>
-		<div class="top-actions"><span class="system-status">Sample workspace</span><span class="profile-copy"><strong>{data.user.email}</strong><small>{data.user.role === 'admin' ? 'Admin' : 'Support agent'}</small></span><form method="POST" action="/logout"><button type="submit" class="ui-button ui-button-quiet">Sign out</button></form></div>
+		<div class="top-actions"><span class="system-status">{data.slack?.workspace ? `${data.slack.workspace} (${data.slack.channel})` : 'Sample workspace'}</span><span class="profile-copy"><strong>{data.user.email}</strong><small>{data.user.role === 'admin' ? 'Admin' : 'Support agent'}</small></span><form method="POST" action="/logout"><button type="submit" class="ui-button ui-button-quiet">Sign out</button></form></div>
 	</header>
 
 	<div class="workspace">

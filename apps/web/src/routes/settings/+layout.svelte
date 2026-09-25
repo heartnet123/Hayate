@@ -8,7 +8,7 @@
 	<header class="ui-page-heading page-header">
 		<div>
 			<h1>Settings</h1>
-			<p>Only Roles & Permissions changes are saved. Other settings remain preview-only.</p>
+			<p>Only Roles & Permissions and Slack Integration changes are saved. Other settings remain preview-only.</p>
 		</div>
 	</header>
 

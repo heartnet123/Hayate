@@ -35,6 +35,8 @@ const startServer = async () => {
         HELPDESK_ADMIN_PASSWORD: adminPassword,
         HELPDESK_DB_PATH: databasePath,
         NODE_ENV: "test",
+        SLACK_BOT_TOKEN: "xoxb-secret-token-canary",
+        SLACK_SIGNING_SECRET: "slack-signing-secret-canary",
       },
       stderr: "inherit",
       stdout: "ignore",
@@ -99,7 +101,7 @@ afterEach(async () => {
   rmSync(directory, { force: true, recursive: true });
 });
 
-test("HTTP login, permission changes, server enforcement, persistence, and failed saves", async () => {
+test("HTTP login, permission changes, Slack settings, server enforcement, persistence, and failed saves", async () => {
   await startServer();
   expect(await status(get("/settings/roles"))).toBe(401);
   writeFileSync(exposedDatabasePath, "database-secret-canary");
@@ -125,6 +127,14 @@ test("HTTP login, permission changes, server enforcement, persistence, and faile
       })
     )
   ).toBe(401);
+  expect(
+    await status(
+      post("/settings/slack", {
+        channel: "#it-support",
+        workspace: "acme-support",
+      })
+    )
+  ).toBe(401);
   const redirected = await fetch(address, {
     headers: { accept: "text/html" },
     redirect: "manual",
@@ -137,6 +147,24 @@ test("HTTP login, permission changes, server enforcement, persistence, and faile
   expect(admin.cookie).toContain("helpdesk_session=");
   expect(admin.response.headers.get("set-cookie")).toContain("HttpOnly");
   expect(admin.response.headers.get("set-cookie")).toContain("SameSite=Lax");
+  const initialSlackSettings = await text(get("/settings/slack", admin.cookie));
+  expect(initialSlackSettings).toContain("No Slack workspace connected.");
+  expect(initialSlackSettings).not.toContain("xoxb-secret-token-canary");
+  expect(initialSlackSettings).not.toContain("slack-signing-secret-canary");
+
+  const savedSlack = await post(
+    "/settings/slack",
+    { channel: "#it-help", workspace: "acme-support" },
+    admin.cookie
+  );
+  expect(savedSlack.status).toBe(200);
+  const savedSlackBody = await savedSlack.text();
+  expect(savedSlackBody).toContain("Slack settings saved.");
+  expect(savedSlackBody).toContain("acme-support");
+  expect(savedSlackBody).toContain("#it-help");
+  expect(savedSlackBody).not.toContain("xoxb-secret-token-canary");
+  expect(savedSlackBody).not.toContain("slack-signing-secret-canary");
+
   const created = await post(
     "/settings/roles?/create",
     { email: "agent@example.com", password: "temporary-password-2026" },
@@ -157,7 +185,13 @@ test("HTTP login, permission changes, server enforcement, persistence, and faile
 
   const agent = await login("agent@example.com", "temporary-password-2026");
   expect(agent.response.status).toBe(303);
-  expect(await status(get("/slack", agent.cookie))).toBe(200);
+  const agentSlack = await text(get("/slack", agent.cookie));
+  expect(agentSlack).toContain(
+    "Active workspace: acme-support · Support channel: #it-help."
+  );
+  expect(agentSlack).not.toContain("/settings/slack");
+  expect(agentSlack).not.toContain("xoxb-secret-token-canary");
+  expect(agentSlack).not.toContain("slack-signing-secret-canary");
   expect(await status(get("/sop", agent.cookie))).toBe(200);
   expect(await status(get("/%73ettings/general", agent.cookie))).toBe(403);
   await Promise.all(
@@ -170,12 +204,49 @@ test("HTTP login, permission changes, server enforcement, persistence, and faile
   expect(
     await status(
       post(
+        "/settings/slack",
+        { channel: "#rogue", workspace: "rogue-workspace" },
+        agent.cookie
+      )
+    )
+  ).toBe(403);
+  expect(
+    await status(
+      post(
         "/settings/roles?/change",
         { email: "agent@example.com", role: "revoked" },
         agent.cookie
       )
     )
   ).toBe(403);
+
+  await Promise.all(
+    [
+      { channel: "#draft-channel", workspace: "invalid workspace!" },
+      { channel: "missing-hash", workspace: "draft-workspace" },
+    ].map(async (fields) => {
+      const invalid = await post("/settings/slack", fields, admin.cookie);
+      expect(invalid.status).toBe(400);
+      const invalidBody = await invalid.text();
+      expect(invalidBody).toContain(
+        "Enter a valid Slack workspace and support channel"
+      );
+      expect(invalidBody).toContain(fields.workspace);
+      expect(invalidBody).toContain(fields.channel);
+      expect(invalidBody).not.toContain("Slack settings saved.");
+    })
+  );
+
+  const updatedSlack = await post(
+    "/settings/slack",
+    { channel: "#helpdesk-triage", workspace: "acme-ops.slack.com" },
+    admin.cookie
+  );
+  expect(updatedSlack.status).toBe(200);
+  expect(await text(get("/slack", agent.cookie))).toContain(
+    "Active workspace: acme-ops.slack.com · Support channel: #helpdesk-triage."
+  );
+
   expect(
     await status(
       post(
@@ -213,6 +284,9 @@ test("HTTP login, permission changes, server enforcement, persistence, and faile
   const nextAdmin = await login("admin@example.com", adminPassword);
   expect(nextAdmin.response.status).toBe(303);
   expect(await status(get("/settings/roles", nextAdmin.cookie))).toBe(200);
+  const persistedSlack = await text(get("/settings/slack", nextAdmin.cookie));
+  expect(persistedSlack).toContain("acme-ops.slack.com");
+  expect(persistedSlack).toContain("#helpdesk-triage");
   expect(
     await loginStatus("agent@example.com", "temporary-password-2026")
   ).toBe(400);
@@ -251,10 +325,27 @@ test("HTTP login, permission changes, server enforcement, persistence, and faile
   ).toBe(200);
 
   const db = new DatabaseSync(databasePath);
-  db.exec(
-    "CREATE TRIGGER deny_grant BEFORE UPDATE OF role ON users BEGIN SELECT RAISE(ABORT, 'write denied'); END"
-  );
+  db.exec(`
+    CREATE TRIGGER deny_grant BEFORE UPDATE OF role ON users BEGIN SELECT RAISE(ABORT, 'write denied'); END;
+    CREATE TRIGGER deny_slack_save BEFORE UPDATE ON slack_settings BEGIN SELECT RAISE(ABORT, 'slack write denied'); END;
+  `);
   db.close();
+  const failedSlack = await post(
+    "/settings/slack",
+    { channel: "#unsaved-channel", workspace: "unsaved-workspace" },
+    nextAdmin.cookie
+  );
+  expect(failedSlack.status).toBe(500);
+  const failedSlackBody = await failedSlack.text();
+  expect(failedSlackBody).toContain("Unable to save Slack settings");
+  expect(failedSlackBody).toContain("unsaved-workspace");
+  expect(failedSlackBody).toContain("#unsaved-channel");
+  expect(failedSlackBody).not.toContain("slack write denied");
+  expect(failedSlackBody).not.toContain("Slack settings saved.");
+  const unchangedSlack = await text(get("/settings/slack", nextAdmin.cookie));
+  expect(unchangedSlack).toContain("acme-ops.slack.com");
+  expect(unchangedSlack).toContain("#helpdesk-triage");
+
   const failed = await post(
     "/settings/roles?/change",
     { email: "agent@example.com", role: "agent" },
