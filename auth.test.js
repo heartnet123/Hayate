@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
+import { createHmac } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -10,6 +11,7 @@ const databasePath = path.join(directory, "local.db");
 const exposedDatabasePath = path.join(import.meta.dir, "apps/web/exposed.db");
 const exposedEnvPath = path.join(import.meta.dir, "apps/web/.env.auth-test");
 const adminPassword = "secure-admin-password-2026";
+const signingSecret = "slack-signing-secret-canary";
 let server;
 let address;
 
@@ -36,7 +38,7 @@ const startServer = async () => {
         HELPDESK_DB_PATH: databasePath,
         NODE_ENV: "test",
         SLACK_BOT_TOKEN: "xoxb-secret-token-canary",
-        SLACK_SIGNING_SECRET: "slack-signing-secret-canary",
+        SLACK_SIGNING_SECRET: signingSecret,
       },
       stderr: "inherit",
       stdout: "ignore",
@@ -79,6 +81,28 @@ const post = (route, fields, cookie = "") =>
     method: "POST",
     redirect: "manual",
   });
+const slackEvent = (
+  payload,
+  {
+    secret = signingSecret,
+    signature,
+    timestamp = String(Math.floor(Date.now() / 1000)),
+  } = {}
+) => {
+  const body = typeof payload === "string" ? payload : JSON.stringify(payload);
+  const computed =
+    signature ??
+    `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${body}`).digest("hex")}`;
+  return fetch(`${address}/slack/events`, {
+    body,
+    headers: {
+      "content-type": "application/json",
+      "x-slack-request-timestamp": timestamp,
+      "x-slack-signature": computed,
+    },
+    method: "POST",
+  });
+};
 const login = async (email, password) => {
   const response = await post("/login", { email, password });
   return {
@@ -249,6 +273,238 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
 
   expect(
     await status(
+      slackEvent(
+        {
+          event: {
+            channel: "#helpdesk-triage",
+            text: "@ai unauthorized signature",
+            ts: "1710000000.000100",
+            type: "message",
+            user: "U000",
+          },
+          event_id: "Ev-bad-sig",
+          type: "event_callback",
+        },
+        { signature: "v0=deadbeef" }
+      )
+    )
+  ).toBe(401);
+  expect(
+    await status(
+      slackEvent(
+        {
+          event: {
+            channel: "#helpdesk-triage",
+            text: "@ai expired timestamp",
+            ts: "1710000000.000200",
+            type: "message",
+            user: "U000",
+          },
+          event_id: "Ev-stale",
+          type: "event_callback",
+        },
+        { timestamp: String(Math.floor(Date.now() / 1000) - 600) }
+      )
+    )
+  ).toBe(401);
+
+  const challengeRes = await slackEvent({
+    challenge: "challenge-token-123",
+    type: "url_verification",
+  });
+  expect(challengeRes.status).toBe(200);
+  expect(await challengeRes.json()).toEqual({
+    challenge: "challenge-token-123",
+  });
+
+  await Promise.all(
+    [
+      {
+        event: {
+          channel: "#general",
+          text: "@ai wrong channel request",
+          ts: "1710000000.000300",
+          type: "message",
+          user: "U100",
+        },
+        event_id: "Ev-wrong-channel",
+        type: "event_callback",
+        workspace: "acme-ops.slack.com",
+      },
+      {
+        event: {
+          channel: "#helpdesk-triage",
+          text: "general chatter without tagging assistant",
+          ts: "1710000000.000400",
+          type: "message",
+          user: "U100",
+        },
+        event_id: "Ev-no-mention",
+        type: "event_callback",
+        workspace: "acme-ops.slack.com",
+      },
+    ].map(async (ignoredPayload) => {
+      const res = await slackEvent(ignoredPayload);
+      expect(res.status).toBe(200);
+      const resBody = await res.json();
+      expect(resBody.accepted).toBe(false);
+    })
+  );
+  expect(await text(get("/slack", agent.cookie))).toContain(
+    "Central Queue (0 unassigned)"
+  );
+
+  const firstIntake = await slackEvent({
+    event: {
+      channel: "#helpdesk-triage",
+      text: "@ai VPN keeps disconnecting after update",
+      ts: "1710000001.000100",
+      type: "message",
+      user: "U101",
+      user_name: "Priya Desai",
+    },
+    event_id: "Ev-vpn-1",
+    type: "event_callback",
+    workspace: "acme-ops.slack.com",
+  });
+  expect(firstIntake.status).toBe(200);
+  expect(await firstIntake.json()).toEqual({
+    accepted: true,
+    duplicate: false,
+    queued: true,
+  });
+
+  const duplicateDelivery = await slackEvent({
+    event: {
+      channel: "#helpdesk-triage",
+      text: "@ai VPN keeps disconnecting after update",
+      ts: "1710000001.000100",
+      type: "message",
+      user: "U101",
+      user_name: "Priya Desai",
+    },
+    event_id: "Ev-vpn-1",
+    type: "event_callback",
+    workspace: "acme-ops.slack.com",
+  });
+  expect(duplicateDelivery.status).toBe(200);
+  expect(await duplicateDelivery.json()).toEqual({
+    accepted: true,
+    duplicate: true,
+    queued: true,
+  });
+
+  const sameTextRetag = await slackEvent({
+    event: {
+      channel: "#helpdesk-triage",
+      text: "@ai VPN keeps disconnecting after update",
+      thread_ts: "1710000001.000100",
+      ts: "1710000001.000200",
+      type: "message",
+      user: "U101",
+      user_name: "Priya Desai",
+    },
+    event_id: "Ev-vpn-retag-same",
+    type: "event_callback",
+    workspace: "acme-ops.slack.com",
+  });
+  expect(sameTextRetag.status).toBe(200);
+  const retagBody = await sameTextRetag.json();
+  expect(retagBody.duplicate).toBe(true);
+
+  const threadFollowUp = await slackEvent({
+    event: {
+      channel: "#helpdesk-triage",
+      text: "@ai I am seeing the same error in this thread",
+      thread_ts: "1710000001.000100",
+      ts: "1710000002.000100",
+      type: "message",
+      user: "U202",
+      user_name: "Alex Rivera",
+    },
+    event_id: "Ev-vpn-followup",
+    type: "event_callback",
+    workspace: "acme-ops.slack.com",
+  });
+  expect(threadFollowUp.status).toBe(200);
+
+  await Promise.all(
+    Array.from({ length: 5 }, (_, index) =>
+      slackEvent({
+        event: {
+          channel: "#helpdesk-triage",
+          text: "@ai Okta MFA reset needed urgently",
+          thread_ts: "1710000010.000100",
+          ts: "1710000010.000100",
+          type: "message",
+          user: "U303",
+          user_name: "Daniel Kim",
+        },
+        event_id: `Ev-concurrent-${index}`,
+        type: "event_callback",
+        workspace: "acme-ops.slack.com",
+      })
+    )
+  );
+
+  const failedDelivery = await slackEvent({
+    event: {
+      channel: "#helpdesk-triage",
+      text: "@ai Confidential payroll outage body",
+      ts: "1710000020.000100",
+      type: "message",
+      user: "U404",
+      user_name: "Emily Carter",
+    },
+    event_id: "Ev-slack-fail",
+    simulate_slack_error: true,
+    type: "event_callback",
+    workspace: "acme-ops.slack.com",
+  });
+  expect(failedDelivery.status).toBe(202);
+  const failedDeliveryText = await failedDelivery.text();
+  expect(failedDeliveryText).toContain(
+    "Slack delivery failed; request queued in central queue."
+  );
+  expect(failedDeliveryText).not.toContain("xoxb-secret-token-canary");
+  expect(failedDeliveryText).not.toContain(signingSecret);
+  expect(failedDeliveryText).not.toContain("Confidential payroll outage body");
+
+  const queueHtml = await text(get("/slack", agent.cookie));
+  expect(queueHtml).toContain("Central Queue (3 unassigned)");
+  expect(queueHtml).toContain(
+    "Ticket #1</strong> · Unassigned · Owner: Priya Desai (U101) · Source thread: acme-ops.slack.com #helpdesk-triage 1710000001.000100"
+  );
+  expect(queueHtml).toContain(
+    "Escalation reason: No approved SOP matched this request."
+  );
+  expect(queueHtml).toContain(
+    "Priya Desai</strong> (1710000001.000100): @ai VPN keeps disconnecting after update"
+  );
+  expect(queueHtml).toContain(
+    "Alex Rivera</strong> (1710000002.000100): @ai I am seeing the same error in this thread"
+  );
+  expect(
+    queueHtml.split(
+      "Priya Desai</strong> (1710000001.000100): @ai VPN keeps disconnecting after update"
+    ).length - 1
+  ).toBe(1);
+  expect(queueHtml).toContain("Owner: Daniel Kim (U303)");
+  expect(queueHtml).toContain("Owner: Emily Carter (U404)");
+  expect(queueHtml).toContain(
+    "Slack delivery failed; request queued in central queue."
+  );
+
+  const adminSlackSettings = await text(get("/settings/slack", admin.cookie));
+  expect(adminSlackSettings).toContain(
+    "Slack delivery failed; request queued in central queue."
+  );
+  expect(adminSlackSettings).not.toContain("xoxb-secret-token-canary");
+  expect(adminSlackSettings).not.toContain(signingSecret);
+  expect(adminSlackSettings).not.toContain("Confidential payroll outage body");
+
+  expect(
+    await status(
       post(
         "/settings/roles?/change",
         { email: "agent@example.com", role: "admin" },
@@ -301,7 +557,9 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   ).toBe(200);
   const again = await login("agent@example.com", "temporary-password-2026");
   expect(again.response.status).toBe(303);
-  expect(await status(get("/slack", again.cookie))).toBe(200);
+  const persistedQueue = await text(get("/slack", again.cookie));
+  expect(persistedQueue).toContain("Central Queue (3 unassigned)");
+  expect(persistedQueue).toContain("Owner: Priya Desai (U101)");
   expect(
     await status(
       post(

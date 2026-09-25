@@ -10,6 +10,7 @@ export const handle: Handle = ({ event, resolve }) => {
   if (
     path === "/login" ||
     path.startsWith("/login/") ||
+    path === "/slack/events" ||
     path.startsWith("/_app/") ||
     path === "/favicon.png"
   ) {

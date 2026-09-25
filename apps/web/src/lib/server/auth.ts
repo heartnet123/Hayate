@@ -3,6 +3,7 @@ import {
   scryptSync,
   timingSafeEqual,
   createHash,
+  createHmac,
 } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
@@ -29,6 +30,27 @@ export const validSlackWorkspace = (workspace: string) =>
   /^[a-zA-Z0-9][a-zA-Z0-9_-]{1,62}(?:\.slack\.com)?$/u.test(workspace);
 export const validSlackChannel = (channel: string) =>
   /^#[a-z0-9][a-z0-9_-]{1,79}$/u.test(channel);
+const aiMentionPattern =
+  /(?:^|\s|<)@(?:ai|helpdesk(?:[-_]?ai)?)\b|<@U[A-Z0-9]+>/iu;
+
+export interface SlackEventPayload {
+  challenge?: string;
+  event?: {
+    bot_id?: string;
+    channel?: string;
+    subtype?: string;
+    text?: string;
+    thread_ts?: string;
+    ts?: string;
+    type?: string;
+    user?: string;
+    user_name?: string;
+  };
+  event_id?: string;
+  simulate_slack_error?: boolean;
+  type?: string;
+  workspace?: string;
+}
 
 let database: DatabaseSync | undefined;
 const getDatabase = (): DatabaseSync => {
@@ -59,6 +81,33 @@ const getDatabase = (): DatabaseSync => {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       workspace TEXT NOT NULL,
       channel TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS slack_requests (
+      id INTEGER PRIMARY KEY,
+      workspace TEXT NOT NULL,
+      channel TEXT NOT NULL,
+      thread_ts TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      owner_name TEXT NOT NULL,
+      UNIQUE(workspace, channel, thread_ts)
+    );
+    CREATE TABLE IF NOT EXISTS slack_messages (
+      id INTEGER PRIMARY KEY,
+      request_id INTEGER NOT NULL REFERENCES slack_requests(id),
+      event_id TEXT NOT NULL UNIQUE,
+      message_ts TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      user_name TEXT NOT NULL,
+      body TEXT NOT NULL,
+      UNIQUE(request_id, message_ts),
+      UNIQUE(request_id, user_id, body)
+    );
+    CREATE TABLE IF NOT EXISTS tickets (
+      id INTEGER PRIMARY KEY,
+      request_id INTEGER NOT NULL UNIQUE REFERENCES slack_requests(id),
+      assignee_id INTEGER REFERENCES users(id),
+      reason TEXT NOT NULL,
+      slack_error TEXT NOT NULL DEFAULT ''
     );
   `);
   if (!db.prepare("SELECT id FROM users WHERE role = ? LIMIT 1").get("admin")) {
@@ -192,13 +241,22 @@ export const changeAgentRole = (
   }
 };
 
-export const getSlackSettings = () =>
-  (getDatabase()
+export const getSlackSettings = () => {
+  const db = getDatabase();
+  const row = db
     .prepare("SELECT workspace, channel FROM slack_settings WHERE id = 1")
-    .get() as { channel: string; workspace: string } | undefined) ?? {
-    channel: "#it-support",
-    workspace: "",
+    .get() as { channel: string; workspace: string } | undefined;
+  const errorRow = db
+    .prepare(
+      "SELECT slack_error FROM tickets WHERE slack_error != '' ORDER BY id DESC LIMIT 1"
+    )
+    .get() as { slack_error: string } | undefined;
+  return {
+    channel: row?.channel ?? "#it-support",
+    lastError: errorRow?.slack_error ?? "",
+    workspace: row?.workspace ?? "",
   };
+};
 
 export const saveSlackSettings = (workspace: string, channel: string) =>
   getDatabase()
@@ -206,3 +264,147 @@ export const saveSlackSettings = (workspace: string, channel: string) =>
       "INSERT INTO slack_settings (id, workspace, channel) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET workspace = excluded.workspace, channel = excluded.channel"
     )
     .run(workspace, channel);
+
+export const verifySlackSignature = (
+  rawBody: string,
+  timestamp: string | null,
+  signature: string | null
+): boolean => {
+  const secret = process.env.SLACK_SIGNING_SECRET;
+  if (
+    !(secret && timestamp && signature && /^\d+$/u.test(timestamp)) ||
+    Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp)) > 300
+  ) {
+    return false;
+  }
+  const expected = Buffer.from(
+    `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${rawBody}`).digest("hex")}`
+  );
+  const actual = Buffer.from(signature);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+};
+
+export const ingestSlackEvent = (payload: SlackEventPayload) => {
+  const settings = getSlackSettings();
+  const ev = payload.event;
+  if (
+    !settings.workspace ||
+    (payload.workspace && payload.workspace !== settings.workspace) ||
+    !ev ||
+    !ev.ts ||
+    !ev.user ||
+    !ev.text ||
+    [
+      ev.type === "message",
+      !ev.bot_id,
+      !ev.subtype,
+      ev.channel === settings.channel,
+    ].includes(false)
+  ) {
+    return { accepted: false };
+  }
+  const messageTs = ev.ts.trim();
+  const threadTs = (ev.thread_ts ?? messageTs).trim();
+  const userId = ev.user.trim();
+  const userName = (ev.user_name ?? userId).trim();
+  const body = ev.text.trim();
+  const eventId = (
+    payload.event_id ?? `${settings.workspace}:${settings.channel}:${messageTs}`
+  ).trim();
+  const slackError = payload.simulate_slack_error
+    ? "Slack delivery failed; request queued in central queue."
+    : "";
+
+  const db = getDatabase();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const existing = db
+      .prepare(
+        "SELECT id FROM slack_requests WHERE workspace = ? AND channel = ? AND thread_ts = ?"
+      )
+      .get(settings.workspace, settings.channel, threadTs) as
+      | { id: number }
+      | undefined;
+    if (!existing && !aiMentionPattern.test(body)) {
+      db.exec("COMMIT");
+      return { accepted: false };
+    }
+    const requestRow =
+      existing ??
+      (db
+        .prepare(
+          "INSERT INTO slack_requests (workspace, channel, thread_ts, owner_id, owner_name) VALUES (?, ?, ?, ?, ?) RETURNING id"
+        )
+        .get(
+          settings.workspace,
+          settings.channel,
+          threadTs,
+          userId,
+          userName
+        ) as { id: number });
+    const duplicate =
+      db
+        .prepare(
+          "INSERT INTO slack_messages (request_id, event_id, message_ts, user_id, user_name, body) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
+        )
+        .run(requestRow.id, eventId, messageTs, userId, userName, body)
+        .changes === 0;
+    db.prepare(
+      "INSERT INTO tickets (request_id, assignee_id, reason, slack_error) VALUES (?, NULL, ?, ?) ON CONFLICT(request_id) DO UPDATE SET slack_error = CASE WHEN excluded.slack_error != '' THEN excluded.slack_error ELSE tickets.slack_error END"
+    ).run(requestRow.id, "No approved SOP matched this request.", slackError);
+    db.exec("COMMIT");
+    return {
+      accepted: true,
+      duplicate,
+      queued: true,
+      ...(slackError ? { slackError } : {}),
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+};
+
+export const listCentralQueue = () => {
+  const db = getDatabase();
+  const rows = db
+    .prepare(`
+      SELECT
+        tickets.id,
+        tickets.request_id AS requestId,
+        tickets.reason,
+        tickets.slack_error AS slackError,
+        slack_requests.workspace,
+        slack_requests.channel,
+        slack_requests.thread_ts AS threadTs,
+        slack_requests.owner_id AS ownerId,
+        slack_requests.owner_name AS ownerName
+      FROM tickets
+      JOIN slack_requests ON slack_requests.id = tickets.request_id
+      WHERE tickets.assignee_id IS NULL
+      ORDER BY tickets.id ASC
+    `)
+    .all() as (Record<
+    | "channel"
+    | "ownerId"
+    | "ownerName"
+    | "reason"
+    | "slackError"
+    | "threadTs"
+    | "workspace",
+    string
+  > & { id: number; requestId: number })[];
+  const messageStmt = db.prepare(`
+    SELECT id, message_ts AS messageTs, user_id AS userId, user_name AS userName, body
+    FROM slack_messages
+    WHERE request_id = ?
+    ORDER BY message_ts ASC, id ASC
+  `);
+  return rows.map((row) => ({
+    ...row,
+    messages: messageStmt.all(row.requestId) as (Record<
+      "body" | "messageTs" | "userId" | "userName",
+      string
+    > & { id: number })[],
+  }));
+};
