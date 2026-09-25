@@ -8,7 +8,7 @@
 	<header class="ui-page-heading page-header">
 		<div>
 			<h1>Settings</h1>
-			<p>Explore sample configuration. Changes stay on this page and are not saved.</p>
+			<p>Only Roles & Permissions changes are saved. Other settings remain preview-only.</p>
 		</div>
 	</header>
 

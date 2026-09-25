@@ -15,7 +15,7 @@
 		<div class="card-icon red" aria-hidden="true">⚠</div>
 		<div class="card-heading-copy">
 			<h2 class="danger-title">Danger Zone</h2>
-			<p>Irreversible actions for system administrators only.</p>
+			<p>Preview-only actions; no data changes.</p>
 		</div>
 	</header>
 
@@ -24,7 +24,7 @@
 			<div class="danger-icon-cell red-bg" aria-hidden="true">⊝</div>
 			<div class="danger-copy">
 				<strong>Clear All Data</strong>
-				<p>Permanently delete all tickets, users, and system data. This action cannot be undone.</p>
+				<p>Preview only; system data is not deleted.</p>
 			</div>
 			<button
 				type="button"

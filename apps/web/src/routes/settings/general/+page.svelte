@@ -23,28 +23,28 @@
 
 	const handleSave = (event: SubmitEvent) => {
 		event.preventDefault();
-		showToast('Settings saved successfully.');
+		showToast('Preview only. Settings were not saved.');
 	};
 
 	const triggerRebuildIndex = () => {
 		isRebuildingIndex = true;
 		setTimeout(() => {
 			isRebuildingIndex = false;
-			showToast('Search index rebuilt successfully.');
+			showToast('Preview only. Search index was not rebuilt.');
 		}, 1200);
 	};
 
 	const triggerResetSystem = () => {
 		showResetConfirm = false;
-		showToast('System data reset successfully.');
+		showToast('Preview only. System data was not reset.');
 	};
 
 	const handleExport = (type: string) => {
-		showToast(`Exported ${type} configuration.`);
+		showToast(`Preview only. ${type} was not exported.`);
 	};
 
 	const handleImport = () => {
-		showToast('Knowledge base import initiated.');
+		showToast('Preview only. Knowledge base was not imported.');
 	};
 </script>
 
@@ -58,7 +58,7 @@
 <div class="settings-grid" inert={showResetConfirm}>
 	<CompanySystemCard bind:form onsubmit={handleSave} />
 	<SystemPreferencesCard bind:form />
-	<AppearanceBrandingCard bind:form onchangeLogo={() => showToast('Logo picker opened.')} />
+	<AppearanceBrandingCard bind:form onchangeLogo={() => showToast('Preview only. Logo was not changed.')} />
 	<SystemInformationCard />
 	<DangerZoneCard
 		{isRebuildingIndex}
@@ -85,8 +85,8 @@
 				<h3 id="modal-title">Reset Entire System?</h3>
 			</div>
 			<p class="modal-body">
-				Are you absolutely sure? This will delete all tickets, user associations, and uploaded documents. This operation cannot be reversed.
-			</p>
+					Preview only. This button does not delete data.
+				</p>
 			<div class="modal-footer">
 				<button type="button" class="ui-button" autofocus onclick={() => (showResetConfirm = false)}>
 					Cancel
@@ -101,8 +101,8 @@
 
 <!-- Toast Notification -->
 {#if toastMessage}
-	<div class="toast-notice" role="status">
-		<span class="toast-dot" aria-hidden="true">✓</span>
+	<div class="toast-notice" role="alert">
+		<span class="toast-dot" aria-hidden="true">!</span>
 		<span>{toastMessage}</span>
 	</div>
 {/if}
@@ -188,7 +188,7 @@
 		align-items: center;
 		gap: 10px;
 		padding: 10px 16px;
-		border: 1px solid var(--ui-success);
+		border: 1px solid var(--ui-danger);
 		border-radius: var(--ui-radius-sm);
 		background: var(--ui-surface);
 		color: var(--ui-text);
@@ -201,8 +201,8 @@
 		width: 18px;
 		height: 18px;
 		border-radius: 50%;
-		background: var(--ui-success-soft);
-		color: var(--ui-success);
+		background: var(--ui-danger-soft);
+		color: var(--ui-danger);
 		font-size: 11px;
 		font-weight: 700;
 	}

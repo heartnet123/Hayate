@@ -8,7 +8,7 @@
 	let notice = $state('');
 
 	const addPolicy = () => {
-		notice = 'New SLA policy modal opened.';
+		notice = 'Preview only. Policy editor is not available.';
 		setTimeout(() => (notice = ''), 2500);
 	};
 </script>
@@ -57,8 +57,8 @@
 </section>
 
 {#if notice}
-	<div class="toast-notice" role="status">
-		<span class="toast-dot" aria-hidden="true">✓</span>
+	<div class="toast-notice" role="alert">
+		<span class="toast-dot" aria-hidden="true">!</span>
 		<span>{notice}</span>
 	</div>
 {/if}
@@ -81,6 +81,6 @@
 	.policy-bullet.primary { background: var(--ui-primary); }
 	.policy-bullet.muted { background: var(--ui-muted); }
 	.edit-btn { font-size: 12px; cursor: pointer; }
-	.toast-notice { position: fixed; right: 24px; bottom: 24px; z-index: 60; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border: 1px solid var(--ui-success); border-radius: var(--ui-radius-sm); background: var(--ui-surface); color: var(--ui-text); font-size: 13px; }
-	.toast-dot { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--ui-success-soft); color: var(--ui-success); font-size: 11px; font-weight: 700; }
+	.toast-notice { position: fixed; right: 24px; bottom: 24px; z-index: 60; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border: 1px solid var(--ui-danger); border-radius: var(--ui-radius-sm); background: var(--ui-surface); color: var(--ui-text); font-size: 13px; }
+	.toast-dot { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 11px; font-weight: 700; }
 </style>
