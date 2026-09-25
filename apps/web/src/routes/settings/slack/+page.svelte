@@ -8,6 +8,7 @@
   <p>Configure the Slack workspace and support channel used for incoming requests.</p>
   {#if form?.message}<p role="alert" class="error">{form.message}</p>{/if}
   {#if form?.success}<p role="status">Slack settings saved.</p>{/if}
+  {#if data.slack?.lastError}<p role="alert" class="error">{data.slack.lastError}</p>{/if}
   <p>{#if data.slack?.workspace}Active workspace: <strong>{data.slack.workspace}</strong> · Support channel: <strong>{data.slack.channel}</strong>{:else}No Slack workspace connected.{/if}</p>
   <form method="POST" class="slack-form">
     <label for="slack-workspace">Slack workspace</label>

@@ -55,6 +55,26 @@
 		{/each}
 	</section>
 
+	<section class="panel ui-panel" aria-label="Central queue">
+		<h2>Central Queue ({data.queue?.length ?? 0} unassigned)</h2>
+		{#if data.queue?.length}
+			{#each data.queue as item (item.id)}
+				<article>
+					<p><strong>Ticket #{item.id}</strong> · Unassigned · Owner: {item.ownerName} ({item.ownerId}) · Source thread: {item.workspace} {item.channel} {item.threadTs}</p>
+					<p>Escalation reason: {item.reason}</p>
+					{#if item.slackError}<p role="alert">{item.slackError}</p>{/if}
+					<ul>
+						{#each item.messages as msg (msg.id)}
+							<li><strong>{msg.userName}</strong> ({msg.messageTs}): {msg.body}</li>
+						{/each}
+					</ul>
+				</article>
+			{/each}
+		{:else}
+			<p>No unassigned tickets in central queue.</p>
+		{/if}
+	</section>
+
 	<div class="intake-grid">
 		<section class="panel ui-panel inbox-panel">
 			<div class="inbox-heading"><h2>Incoming Messages</h2><span class="live-pill ui-badge">Sample</span><label class="channel-select"><select class="ui-field" aria-label="Filter messages by channel" bind:value={selectedChannel} onchange={() => { replyDraft = ''; replyNotice = ''; ticketCreated = false; }}><option>All channels</option><option>{supportChannel}</option><option>#general</option><option>#engineering</option><option>#hr</option></select></label></div>

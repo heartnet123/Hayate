@@ -4,14 +4,14 @@
 
 An interactive help desk interface prototype built with SvelteKit. Administrators manage staff access; support metrics, Slack intake, SOP drafting, and other configuration screens use sample data.
 
-> [!IMPORTANT] This remains a UI demo except for sign-in, Roles & Permissions, and Slack workspace/channel configuration. Metrics, messages, tickets, AI suggestions, and other settings are examples. Preview actions do not call Slack or an AI model and are lost on reload.
+> [!IMPORTANT] This remains a UI demo except for sign-in, Roles & Permissions, Slack workspace/channel configuration, and signed Slack request intake into the central queue. Metrics, sample messages, SOP drafts, and other settings are examples.
 
 ## Explore the demo
 
 | Route | What you can explore |
 | --- | --- |
 | `/` | Dashboard with ticket trends, categories, CSAT, AI insight examples, and recent tickets. |
-| `/slack` | Sample conversations, channel filtering, a reply draft, triage example, and ticket preview. |
+| `/slack` | Unassigned central queue from signed `/slack/events` requests, plus sample conversations, channel filtering, and triage preview. |
 | `/sop` | A sample ticket and editable SOP title and sections, with reviewer and publish controls. |
 | `/settings` | Admin-only: manage support agents in Roles & Permissions and configure the Slack workspace and support channel in Slack Integration. Other tabs remain previews. |
 
