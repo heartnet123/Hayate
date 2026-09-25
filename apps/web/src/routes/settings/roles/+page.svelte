@@ -25,9 +25,9 @@
             <th scope="row">{user.email}</th><td>{user.role === 'admin' ? 'Admin' : user.role === 'agent' ? 'Support agent' : 'Revoked'}</td>
             <td>
               {#if user.role === 'agent'}
-                <form method="POST" action="?/revoke"><input type="hidden" name="email" value={user.email} /><button type="submit" class="ui-button ui-button-quiet">Revoke access</button></form>
+                <form method="POST" action="?/change"><input type="hidden" name="email" value={user.email} /><button type="submit" name="role" value="revoked" class="ui-button ui-button-quiet">Revoke access</button></form>
               {:else if user.role === 'revoked'}
-                <form method="POST" action="?/grant"><input type="hidden" name="email" value={user.email} /><button type="submit" class="ui-button ui-button-quiet">Grant access</button></form>
+                <form method="POST" action="?/change"><input type="hidden" name="email" value={user.email} /><button type="submit" name="role" value="agent" class="ui-button ui-button-quiet">Grant access</button></form>
               {/if}
             </td>
           </tr>

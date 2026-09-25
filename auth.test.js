@@ -170,12 +170,21 @@ test("HTTP login, permission changes, server enforcement, persistence, and faile
   expect(
     await status(
       post(
-        "/settings/roles?/revoke",
-        { email: "agent@example.com" },
+        "/settings/roles?/change",
+        { email: "agent@example.com", role: "revoked" },
         agent.cookie
       )
     )
   ).toBe(403);
+  expect(
+    await status(
+      post(
+        "/settings/roles?/change",
+        { email: "agent@example.com", role: "admin" },
+        admin.cookie
+      )
+    )
+  ).toBe(400);
   const agentHome = await text(get("/", agent.cookie));
   expect(agentHome).not.toContain("/settings/roles");
   expect(agentHome).not.toContain('aria-label="Settings"');
@@ -184,8 +193,8 @@ test("HTTP login, permission changes, server enforcement, persistence, and faile
   expect(
     await status(
       post(
-        "/settings/roles?/revoke",
-        { email: "agent@example.com" },
+        "/settings/roles?/change",
+        { email: "agent@example.com", role: "revoked" },
         admin.cookie
       )
     )
@@ -210,8 +219,8 @@ test("HTTP login, permission changes, server enforcement, persistence, and faile
   expect(
     await status(
       post(
-        "/settings/roles?/grant",
-        { email: "agent@example.com" },
+        "/settings/roles?/change",
+        { email: "agent@example.com", role: "agent" },
         nextAdmin.cookie
       )
     )
@@ -234,8 +243,8 @@ test("HTTP login, permission changes, server enforcement, persistence, and faile
   expect(
     await status(
       post(
-        "/settings/roles?/revoke",
-        { email: "agent@example.com" },
+        "/settings/roles?/change",
+        { email: "agent@example.com", role: "revoked" },
         nextAdmin.cookie
       )
     )
@@ -247,8 +256,8 @@ test("HTTP login, permission changes, server enforcement, persistence, and faile
   );
   db.close();
   const failed = await post(
-    "/settings/roles?/grant",
-    { email: "agent@example.com" },
+    "/settings/roles?/change",
+    { email: "agent@example.com", role: "agent" },
     nextAdmin.cookie
   );
   expect(failed.status).toBe(500);

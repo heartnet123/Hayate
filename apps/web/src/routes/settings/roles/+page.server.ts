@@ -17,6 +17,29 @@ export const load: PageServerLoad = ({ locals }) => {
 };
 
 export const actions: Actions = {
+  change: async ({ request, locals }) => {
+    if (locals.user?.role !== "admin") {
+      error(403, "Admin access required");
+    }
+    const form = await request.formData();
+    const email = String(form.get("email") ?? "")
+      .trim()
+      .toLowerCase();
+    const role = form.get("role");
+    if (!validEmail(email) || (role !== "agent" && role !== "revoked")) {
+      return fail(400, { message: "Invalid account or role." });
+    }
+    try {
+      if (!changeAgentRole(email, role)) {
+        return fail(400, {
+          message: "Agent role already set or account not found.",
+        });
+      }
+    } catch {
+      return fail(500, { message: "Unable to save permissions. Try again." });
+    }
+    return { success: true };
+  },
   create: async ({ request, locals }) => {
     if (locals.user?.role !== "admin") {
       error(403, "Admin access required");
@@ -34,46 +57,6 @@ export const actions: Actions = {
     try {
       if (!createAgent(email, password)) {
         return fail(400, { message: "Account already exists." });
-      }
-    } catch {
-      return fail(500, { message: "Unable to save permissions. Try again." });
-    }
-    return { success: true };
-  },
-  grant: async ({ request, locals }) => {
-    if (locals.user?.role !== "admin") {
-      error(403, "Admin access required");
-    }
-    const form = await request.formData();
-    const email = String(form.get("email") ?? "")
-      .trim()
-      .toLowerCase();
-    if (!validEmail(email)) {
-      return fail(400, { message: "Invalid account." });
-    }
-    try {
-      if (!changeAgentRole(email, "agent")) {
-        return fail(400, { message: "No revoked agent with that email." });
-      }
-    } catch {
-      return fail(500, { message: "Unable to save permissions. Try again." });
-    }
-    return { success: true };
-  },
-  revoke: async ({ request, locals }) => {
-    if (locals.user?.role !== "admin") {
-      error(403, "Admin access required");
-    }
-    const form = await request.formData();
-    const email = String(form.get("email") ?? "")
-      .trim()
-      .toLowerCase();
-    if (!validEmail(email)) {
-      return fail(400, { message: "Invalid account." });
-    }
-    try {
-      if (!changeAgentRole(email, "revoked")) {
-        return fail(400, { message: "No active agent with that email." });
       }
     } catch {
       return fail(500, { message: "Unable to save permissions. Try again." });
