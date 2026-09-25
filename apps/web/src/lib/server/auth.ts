@@ -25,6 +25,10 @@ export const validEmail = (email: string) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email) && email.length <= 254;
 export const validPassword = (password: string) =>
   password.length >= 12 && password.length <= 128;
+export const validSlackWorkspace = (workspace: string) =>
+  /^[a-zA-Z0-9][a-zA-Z0-9_-]{1,62}(?:\.slack\.com)?$/u.test(workspace);
+export const validSlackChannel = (channel: string) =>
+  /^#[a-z0-9][a-z0-9_-]{1,79}$/u.test(channel);
 
 let database: DatabaseSync | undefined;
 const getDatabase = (): DatabaseSync => {
@@ -50,6 +54,11 @@ const getDatabase = (): DatabaseSync => {
       token_hash TEXT PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id),
       expires_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS slack_settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      workspace TEXT NOT NULL,
+      channel TEXT NOT NULL
     );
   `);
   if (!db.prepare("SELECT id FROM users WHERE role = ? LIMIT 1").get("admin")) {
@@ -182,3 +191,18 @@ export const changeAgentRole = (
     throw error;
   }
 };
+
+export const getSlackSettings = () =>
+  (getDatabase()
+    .prepare("SELECT workspace, channel FROM slack_settings WHERE id = 1")
+    .get() as { channel: string; workspace: string } | undefined) ?? {
+    channel: "#it-support",
+    workspace: "",
+  };
+
+export const saveSlackSettings = (workspace: string, channel: string) =>
+  getDatabase()
+    .prepare(
+      "INSERT INTO slack_settings (id, workspace, channel) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET workspace = excluded.workspace, channel = excluded.channel"
+    )
+    .run(workspace, channel);
