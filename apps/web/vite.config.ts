@@ -1,12 +1,25 @@
 import { sveltekit } from "@sveltejs/kit/vite";
 import tailwindcss from "@tailwindcss/vite";
-import { varlockVitePlugin } from "@varlock/vite-integration";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  plugins: [
-    varlockVitePlugin({ ssrInjectMode: "auto-load" }),
-    tailwindcss(),
-    sveltekit(),
-  ],
+  plugins: [tailwindcss(), sveltekit()],
+  server: {
+    fs: {
+      deny: [
+        ".env",
+        ".env.*",
+        "*.{crt,pem,key,p12,pfx,cer,der}",
+        ".npmrc",
+        ".yarnrc.yml",
+        "**/.git/**",
+        "*.db",
+        "*.db-*",
+        "*.sqlite",
+        "*.sqlite-*",
+        "*.sqlite3",
+        "*.sqlite3-*",
+      ],
+    },
+  },
 });

@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import '../app.css';
 
-	const { children } = $props();
+	let { children, data } = $props();
 	const navItems = [
 		{ count: '', href: '/', icon: '⌂', label: 'Dashboard' },
 		{ count: '12', href: null, icon: '▱', label: 'Tickets' },
@@ -18,20 +18,21 @@
 </script>
 
 <a class="skip-link" href="#main-content">Skip to content</a>
+{#if data.user}
 <div class="app-shell">
 	<header class="topbar">
 		<a class="brand" href="/" aria-label="HelpDesk AI home"><span class="brand-mark">✦</span><span>HelpDesk AI</span></a>
 		<div class="search-wrap" role="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.4" /><path d="m16 16 4.2 4.2" /></svg><span>Search preview unavailable</span></div>
-		<div class="top-actions"><span class="system-status">Sample workspace</span><button type="button" class="icon-button notification" aria-label="Notifications preview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg></button><span class="top-divider"></span><span class="profile"><span class="avatar portrait"></span><span class="profile-copy"><strong>Sarah Chen</strong><small>Sample profile</small></span></span></div>
+		<div class="top-actions"><span class="system-status">Sample workspace</span><span class="profile-copy"><strong>{data.user.email}</strong><small>{data.user.role === 'admin' ? 'Admin' : 'Support agent'}</small></span><form method="POST" action="/logout"><button type="submit" class="ui-button ui-button-quiet">Sign out</button></form></div>
 	</header>
 
 	<div class="workspace">
 		<aside class="sidebar">
 			<nav aria-label="Main navigation" class="main-nav">
 				{#each navItems as item}
-					{#if item.href}
+					{#if item.href && (item.href !== '/settings' || data.user.role === 'admin')}
 						<a href={item.href} aria-label={item.label} class:active={currentPath === item.href || (item.href === '/settings' && currentPath.startsWith('/settings'))} aria-current={(currentPath === item.href || (item.href === '/settings' && currentPath.startsWith('/settings'))) ? 'page' : undefined}><span class="nav-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>{#if item.count}<span class="nav-count tabular-nums">{item.count}</span>{/if}</a>
-					{:else}
+					{:else if !item.href}
 						<span class="nav-placeholder" title="{item.label} (coming soon)"><span class="nav-icon" aria-hidden="true">{item.icon}</span><span>{item.label}</span>{#if item.count}<span class="nav-count tabular-nums">{item.count}</span>{/if}</span>
 					{/if}
 				{/each}
@@ -42,3 +43,6 @@
 		{@render children()}
 	</div>
 </div>
+{:else}
+	{@render children()}
+{/if}

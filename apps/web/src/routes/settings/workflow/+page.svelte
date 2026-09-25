@@ -7,7 +7,7 @@
 	let notice = $state('');
 
 	const save = () => {
-		notice = 'Workflow settings saved.';
+		notice = 'Preview only. Workflow settings were not saved.';
 		setTimeout(() => (notice = ''), 2500);
 	};
 </script>
@@ -118,8 +118,8 @@
 </div>
 
 {#if notice}
-	<div class="toast-notice" role="status">
-		<span class="toast-dot" aria-hidden="true">✓</span>
+	<div class="toast-notice" role="alert">
+		<span class="toast-dot" aria-hidden="true">!</span>
 		<span>{notice}</span>
 	</div>
 {/if}
@@ -144,7 +144,7 @@
 	.toggle-knob { display: block; width: 16px; height: 16px; border-radius: 50%; background: white; transition: transform 200ms; }
 	.toggle-switch.checked .toggle-knob { transform: translateX(18px); }
 	.panel-footer { display: flex; justify-content: flex-end; margin-top: 6px; }
-	.toast-notice { position: fixed; right: 24px; bottom: 24px; z-index: 60; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border: 1px solid var(--ui-success); border-radius: var(--ui-radius-sm); background: var(--ui-surface); color: var(--ui-text); font-size: 13px; }
-	.toast-dot { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--ui-success-soft); color: var(--ui-success); font-size: 11px; font-weight: 700; }
+	.toast-notice { position: fixed; right: 24px; bottom: 24px; z-index: 60; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border: 1px solid var(--ui-danger); border-radius: var(--ui-radius-sm); background: var(--ui-surface); color: var(--ui-text); font-size: 13px; }
+	.toast-dot { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 11px; font-weight: 700; }
 	@media (max-width: 900px) { .subpage-grid { grid-template-columns: 1fr; } }
 </style>

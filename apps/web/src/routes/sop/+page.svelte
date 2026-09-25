@@ -18,9 +18,6 @@
 	let editingTitle = $state(false);
 	let editingSection = $state<number | null>(null);
 	let sectionDraft = $state('');
-	let assignedReviewer = $state('Wiat P.');
-	let publishTarget = $state('Knowledge Base');
-	let reviewStatus = $state('Pending Review');
 	let notice = $state('');
 	let sections = $state([
 		{
@@ -195,21 +192,21 @@
 						</div>
 					</article>
 				{/each}
-				<article class="review-row"><span class="section-icon slate" aria-hidden="true">▤</span><h3>Review Status</h3><div class="review-copy"><span class="review-badge">◈&nbsp; {reviewStatus}</span><p>Created today at 6:14 PM by AI. Ready for technical review.</p></div></article>
+				<article class="review-row"><span class="section-icon slate" aria-hidden="true">▤</span><h3>Review Status</h3><div class="review-copy"><span class="review-badge">◈&nbsp; Pending Review</span><p>Created today at 6:14 PM by AI. Ready for technical review.</p></div></article>
 			</div>
 
 			<footer class="draft-actions">
-				<label>Assign Reviewer <span class="select-wrap"><span class="reviewer-avatar" aria-hidden="true">W</span><select bind:value={assignedReviewer} aria-label="Assign reviewer"><option>Wiat P.</option><option>Alex Rivera</option><option>Sarah Chen</option></select></span></label>
-				<label>Publish Target <span class="select-wrap"><span aria-hidden="true">▣</span><select bind:value={publishTarget} aria-label="Publish target"><option>Knowledge Base</option><option>Internal Wiki</option></select></span></label>
+				<label>Assign Reviewer <span class="select-wrap"><span class="reviewer-avatar" aria-hidden="true">W</span><select value="Wiat P." aria-label="Assign reviewer"><option>Wiat P.</option><option>Alex Rivera</option><option>Sarah Chen</option></select></span></label>
+				<label>Publish Target <span class="select-wrap"><span aria-hidden="true">▣</span><select value="Knowledge Base" aria-label="Publish target"><option>Knowledge Base</option><option>Internal Wiki</option></select></span></label>
 				<span class="action-spacer"></span>
-				<button type="button" class="secondary-action ui-button ui-button-quiet" onclick={() => notify('Draft saved.')}><span aria-hidden="true">⌁</span> <span>Save Draft</span></button>
-				<button type="button" class="secondary-action ui-button ui-button-quiet" onclick={() => { reviewStatus = 'Pending Review'; notify('Review request sent to ' + assignedReviewer + '.'); }}>Request Review</button>
-				<button type="button" class="primary-action ui-button ui-button-primary" onclick={() => { reviewStatus = 'Published'; notify('SOP published to ' + publishTarget + '.'); }}><span aria-hidden="true">✓</span> <span>Approve &amp; Publish</span></button>
+				<button type="button" class="secondary-action ui-button ui-button-quiet" onclick={() => notify('Preview only. Draft was not saved.')}><span aria-hidden="true">⌁</span> <span>Save Draft</span></button>
+				<button type="button" class="secondary-action ui-button ui-button-quiet" onclick={() => notify('Preview only. Review request was not sent.')}>Request Review</button>
+				<button type="button" class="primary-action ui-button ui-button-primary" onclick={() => notify('Preview only. SOP was not published.')}><span aria-hidden="true">✓</span> <span>Approve &amp; Publish</span></button>
 			</footer>
 		</section>
 	</div>
-	<footer class="help-note"><span class="note-spark" aria-hidden="true">✦</span><span>Turning support tickets into documentation helps your team resolve issues faster, reduces repetitive requests, and builds a smarter internal knowledge base.</span><button type="button" onclick={() => notify('SOP drafts turn resolved tickets into reusable knowledge.')}>Learn more about SOP drafts <span aria-hidden="true">↗</span></button></footer>
-	{#if notice}<div class="notice" role="status">{notice}</div>{/if}
+	<footer class="help-note"><span class="note-spark" aria-hidden="true">✦</span><span>Turning support tickets into documentation helps your team resolve issues faster, reduces repetitive requests, and builds a smarter internal knowledge base.</span><button type="button" onclick={() => notify('Preview only. Draft actions do not save or publish.')}>Learn more about SOP drafts <span aria-hidden="true">↗</span></button></footer>
+	{#if notice}<div class="notice" role="alert">{notice}</div>{/if}
 </main>
 
 <style>
@@ -327,7 +324,7 @@
 	.note-spark { color: var(--ui-primary); font-size: 17px; }
 	.help-note>span:nth-child(2) { flex: 1; }
 	.help-note button { display: flex; align-items: center; gap: 7px; border: 0; background: transparent; color: var(--ui-primary); font-size: 11px; white-space: nowrap; cursor: pointer; }
-	.notice { position: fixed; right: 24px; bottom: 22px; z-index: 5; padding: 11px 16px; border: 1px solid var(--ui-success); border-radius: var(--ui-radius-sm); background: var(--ui-success-soft); color: var(--ui-success); font-size: 13px; box-shadow: var(--ui-shadow); }
+	.notice { position: fixed; right: 24px; bottom: 22px; z-index: 5; padding: 11px 16px; border: 1px solid var(--ui-danger); border-radius: var(--ui-radius-sm); background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 13px; box-shadow: var(--ui-shadow); }
 
 	@media (max-width: 1350px) {
 		.sop-page { padding-right: 15px; padding-left: 15px; }

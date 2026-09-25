@@ -7,9 +7,7 @@
       "packages/*"
     ],
     "catalog": {
-      "zod": "^4.5.4",
-      "typescript": "^6.0.3",
-      "varlock": "1.18.0"
+      "typescript": "^6.0.3"
     }
   },
   "type": "module",
@@ -18,13 +16,8 @@
     "build": "turbo run build",
     "check-types": "turbo run check-types",
     "dev:web": "turbo run dev -F web --",
-    "env:generate": "varlock codegen --path ./apps/web/",
-    "postinstall": "varlock codegen --path ./apps/web/",
     "check": "ultracite check",
     "fix": "ultracite fix"
-  },
-  "dependencies": {
-    "zod": "catalog:"
   },
   "devDependencies": {
     "@helpdeskai/config": "workspace:*",
@@ -33,8 +26,7 @@
     "oxlint": "latest",
     "turbo": "^2.10.12",
     "typescript": "catalog:",
-    "ultracite": "7.11.0",
-    "varlock": "catalog:"
+    "ultracite": "7.11.0"
   },
   "packageManager": "bun@1.4.1"
 }
