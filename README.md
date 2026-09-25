@@ -1,58 +1,54 @@
-# helpdeskAI
+<img src="apps/web/static/favicon.png" alt="HelpDesk AI icon" width="48" height="48">
 
-This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines SvelteKit, Self, and more.
+# HelpDesk AI
 
-## Features
+An interactive help desk interface prototype built with SvelteKit. Explore support metrics, Slack intake, SOP drafting, and configuration screens using sample data.
 
-- **TypeScript** - For type safety and improved developer experience
-- **SvelteKit** - Web framework for building Svelte apps
-- **TailwindCSS** - Utility-first CSS for rapid UI development
-- **Oxlint** - Oxlint + Oxfmt (linting & formatting)
-- **Turborepo** - Optimized monorepo build system
+> [!IMPORTANT]
+> This is a UI demo. Metrics, messages, tickets, and AI suggestions are examples. Actions such as saving settings, replying, creating tickets, and publishing SOPs stay in the current page session. They do not call Slack, an AI model, or a backend, and changes are lost on reload.
 
-## Getting Started
+## Explore the demo
 
-First, install the dependencies:
+| Route | What you can explore |
+| --- | --- |
+| `/` | Dashboard with ticket trends, categories, CSAT, AI insight examples, and recent tickets. |
+| `/slack` | Sample conversations, channel filtering, a reply draft, triage example, and ticket preview. |
+| `/sop` | A sample ticket and editable SOP title and sections, with reviewer and publish controls. |
+| `/settings` | Configuration previews for General, Ticket Workflow, Slack Integration, AI Automation, Knowledge Base, Notifications, Roles & Permissions, and SLA Policies. |
+
+The sidebar also shows planned areas such as Tickets, KB Chatbot, Knowledge Base, and Analytics. Those entries do not have pages yet.
+
+## Run locally
+
+Requires [Bun](https://bun.sh/) 1.4.1 (the version declared in `package.json`). From the repository root:
 
 ```bash
 bun install
-```
-
-Then, run the development server:
-
-```bash
 bun run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) in your browser to see the fullstack application.
+Open [http://localhost:5173](http://localhost:5173). To run only the web workspace, use `bun run dev:web`.
 
-## Environment Configuration
+No API keys or database are needed for the current demo. [`apps/web/.env.schema`](apps/web/.env.schema) defines `NODE_ENV` with a `development` default. Installation generates the typed environment accessor. After editing the schema, run `bun run env:generate`.
 
-Each app owns its environment schema in `.env.schema`. Varlock generates `src/env.ts` during installation; run `bun run env:generate` after changing a schema. Commit schemas, and keep secrets in ignored env files or your deployment platform.
+## Project layout
 
-Import the generated `ENV` accessor in application code. Shared database and auth packages receive configuration or initialized clients from the application. See [Varlock's monorepo guide](https://varlock.dev/guides/monorepos/).
-
-Bun's automatic env loading is disabled in `bunfig.toml`; the framework integration or server bootstrap loads Varlock. Node deployments must include Varlock and its dependencies alongside the app schema.
-
-Run standalone Node/Bun tools that use Varlock from the owning app directory so they load that app's schema and env files. `env:generate` only generates TypeScript files; it does not initialize environment values in a subsequent command.
-
-## Git Hooks and Formatting
-
-- Run checks: `bun run check`
-
-## Project Structure
-
-```
-helpdeskAI/
-├── apps/
-│   └── web/         # Fullstack application (SvelteKit)
-├── packages/
+```text
+apps/web/          SvelteKit app, routes, styles, and static assets
+packages/config/   Shared TypeScript configuration
+interface.test.js  Interface regression checks
 ```
 
-## Available Scripts
+Built with Svelte 5, SvelteKit, TypeScript, Tailwind CSS 4, Bun, Turborepo, Varlock, and Ultracite.
 
-- `bun run dev`: Start all applications in development mode
-- `bun run build`: Build all applications
-- `bun run dev:web`: Start only the web application
-- `bun run check-types`: Check TypeScript types across all apps
-- `bun run check`: Run Oxlint and Oxfmt
+## Checks
+
+Run from the repository root:
+
+```bash
+bun test
+bun run check-types
+bun run check
+```
+
+`bun run build` creates a production build. `bun run fix` applies the project's lint and format rules.
