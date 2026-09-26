@@ -127,6 +127,21 @@ afterEach(async () => {
 });
 
 test("HTTP login, permission changes, Slack settings, server enforcement, persistence, and failed saves", async () => {
+  const legacy = new DatabaseSync(databasePath);
+  legacy.exec(`
+    CREATE TABLE slack_messages (
+      id INTEGER PRIMARY KEY,
+      request_id INTEGER NOT NULL,
+      event_id TEXT NOT NULL UNIQUE,
+      message_ts TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      user_name TEXT NOT NULL,
+      body TEXT NOT NULL,
+      UNIQUE(request_id, message_ts),
+      UNIQUE(request_id, user_id, body)
+    );
+  `);
+  legacy.close();
   await startServer();
   expect(await status(get("/settings/roles"))).toBe(401);
   writeFileSync(exposedDatabasePath, "database-secret-canary");
@@ -447,10 +462,29 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   const retagBody = await sameTextRetag.json();
   expect(retagBody.duplicate).toBe(true);
 
+  const changedRetag = await slackEvent({
+    event: {
+      channel: "#helpdesk-triage",
+      text: "@ai another request in the same thread",
+      thread_ts: "1710000001.000100",
+      ts: "1710000001.000300",
+      type: "message",
+      user: "U101",
+    },
+    event_id: "Ev-vpn-retag-changed",
+    type: "event_callback",
+    workspace: "acme-ops.slack.com",
+  });
+  expect(await changedRetag.json()).toEqual({
+    accepted: true,
+    duplicate: true,
+    queued: true,
+  });
+
   const threadFollowUp = await slackEvent({
     event: {
       channel: "#helpdesk-triage",
-      text: "@ai I am seeing the same error in this thread",
+      text: "I am seeing the same error in this thread",
       thread_ts: "1710000001.000100",
       ts: "1710000002.000100",
       type: "message",
@@ -462,6 +496,35 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
     workspace: "acme-ops.slack.com",
   });
   expect(threadFollowUp.status).toBe(200);
+
+  const repeatedFollowUp = await slackEvent({
+    event: {
+      channel: "#helpdesk-triage",
+      text: "following up",
+      thread_ts: "1710000001.000100",
+      ts: "1710000002.000200",
+      type: "message",
+      user: "U202",
+    },
+    event_id: "Ev-vpn-followup-repeat-1",
+    type: "event_callback",
+    workspace: "acme-ops.slack.com",
+  });
+  expect(await repeatedFollowUp.json()).toMatchObject({ duplicate: false });
+  const sameBodyFollowUp = await slackEvent({
+    event: {
+      channel: "#helpdesk-triage",
+      text: "following up",
+      thread_ts: "1710000001.000100",
+      ts: "1710000002.000300",
+      type: "message",
+      user: "U202",
+    },
+    event_id: "Ev-vpn-followup-repeat-2",
+    type: "event_callback",
+    workspace: "acme-ops.slack.com",
+  });
+  expect(await sameBodyFollowUp.json()).toMatchObject({ duplicate: false });
 
   await Promise.all(
     Array.from({ length: 5 }, (_, index) =>
@@ -517,7 +580,7 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
     "Priya Desai</strong> (1710000001.000100):"
   );
   expect(queueHtml).toContain(
-    "Alex Rivera</strong> (1710000002.000100): @ai I am seeing the same error in this thread"
+    "Alex Rivera</strong> (1710000002.000100): I am seeing the same error in this thread"
   );
   expect(
     queueHtml.split(
@@ -525,6 +588,9 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
     ).length - 1
   ).toBe(1);
   expect(queueHtml).toContain("Owner: Daniel Kim (U303)");
+  expect(queueHtml).toContain("1710000002.000200");
+  expect(queueHtml).toContain("1710000002.000300");
+  expect(queueHtml).not.toContain("another request in the same thread");
   expect(queueHtml).toContain("Owner: Emily Carter (U404)");
   expect(queueHtml).toContain(
     "Slack delivery failed; request queued in central queue."
@@ -595,6 +661,8 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   const persistedQueue = await text(get("/slack", again.cookie));
   expect(persistedQueue).toContain("Central Queue (3 unassigned)");
   expect(persistedQueue).toContain("Owner: Priya Desai (U101)");
+  expect(persistedQueue).toContain("1710000002.000200");
+  expect(persistedQueue).toContain("1710000002.000300");
   expect(
     await status(
       post(
@@ -618,6 +686,13 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   ).toBe(200);
 
   const db = new DatabaseSync(databasePath);
+  expect(
+    db.prepare(`
+      SELECT COUNT(*) AS count FROM slack_messages
+      JOIN slack_requests ON slack_requests.id = slack_messages.request_id
+      WHERE slack_requests.thread_ts = ?
+    `).get("1710000001.000100").count
+  ).toBe(4);
   db.exec(`
     CREATE TRIGGER deny_grant BEFORE UPDATE OF role ON users BEGIN SELECT RAISE(ABORT, 'write denied'); END;
     CREATE TRIGGER deny_slack_save BEFORE UPDATE ON slack_settings BEGIN SELECT RAISE(ABORT, 'slack write denied'); END;

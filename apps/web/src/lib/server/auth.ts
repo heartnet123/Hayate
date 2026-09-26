@@ -105,8 +105,7 @@ const getDatabase = (): DatabaseSync => {
       user_id TEXT NOT NULL,
       user_name TEXT NOT NULL,
       body TEXT NOT NULL,
-      UNIQUE(request_id, message_ts),
-      UNIQUE(request_id, user_id, body)
+      UNIQUE(request_id, message_ts)
     );
     CREATE TABLE IF NOT EXISTS tickets (
       id INTEGER PRIMARY KEY,
@@ -116,6 +115,33 @@ const getDatabase = (): DatabaseSync => {
       slack_error TEXT NOT NULL DEFAULT ''
     );
   `);
+  const messageSchema = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'slack_messages'")
+    .get() as { sql: string };
+  if (messageSchema.sql.includes("UNIQUE(request_id, user_id, body)")) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(`
+        CREATE TABLE slack_messages_new (
+          id INTEGER PRIMARY KEY,
+          request_id INTEGER NOT NULL REFERENCES slack_requests(id),
+          event_id TEXT NOT NULL UNIQUE,
+          message_ts TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          user_name TEXT NOT NULL,
+          body TEXT NOT NULL,
+          UNIQUE(request_id, message_ts)
+        );
+        INSERT INTO slack_messages_new SELECT * FROM slack_messages;
+        DROP TABLE slack_messages;
+        ALTER TABLE slack_messages_new RENAME TO slack_messages;
+        COMMIT;
+      `);
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   if (!db.prepare("SELECT id FROM users WHERE role = ? LIMIT 1").get("admin")) {
     const email = process.env.HELPDESK_ADMIN_EMAIL?.trim().toLowerCase();
     const password = process.env.HELPDESK_ADMIN_PASSWORD;
@@ -296,12 +322,12 @@ export const ingestSlackEvent = (payload: SlackEventPayload) => {
   if (
     !settings.workspace ||
     payload.workspace !== settings.workspace ||
-    !payload.event_id?.trim() ||
     !ev ||
-    !ev.ts ||
-    !ev.user ||
-    !ev.text ||
     [
+      Boolean(payload.event_id?.trim()),
+      Boolean(ev.ts),
+      Boolean(ev.user),
+      Boolean(ev.text),
       ev.type === "message",
       !ev.bot_id,
       !ev.subtype,
@@ -333,6 +359,10 @@ export const ingestSlackEvent = (payload: SlackEventPayload) => {
     if (!existing && !mentionsAi(body)) {
       db.exec("COMMIT");
       return { accepted: false };
+    }
+    if (existing && mentionsAi(body)) {
+      db.exec("COMMIT");
+      return { accepted: true, duplicate: true, queued: true };
     }
     const requestRow =
       existing ??
