@@ -77,7 +77,7 @@ const parseSlackMessage = (
 };
 
 let database: DatabaseSync | undefined;
-const getDatabase = (): DatabaseSync => {
+export const getDatabase = (): DatabaseSync => {
   if (database) {
     return database;
   }

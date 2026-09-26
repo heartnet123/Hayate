@@ -1,7 +1,29 @@
 import { listCentralQueue } from "$lib/server/auth";
+import { claimTicket, listAssignedTickets } from "$lib/server/tickets";
+import { error, fail } from "@sveltejs/kit";
 
-import type { PageServerLoad } from "./$types";
+import type { Actions, PageServerLoad } from "./$types";
 
-export const load: PageServerLoad = () => ({
+export const load: PageServerLoad = ({ locals }) => ({
+  assigned: listAssignedTickets(locals.user?.id ?? -1),
   queue: listCentralQueue(),
 });
+
+export const actions: Actions = {
+  claim: async ({ request, locals }) => {
+    if (!locals.user || locals.user.role === "revoked") {
+      error(403, "Support access required");
+    }
+    const data = await request.formData();
+    const rawId = data.get("ticketId");
+    const ticketId = Number(rawId);
+    if (typeof rawId !== "string" || !Number.isSafeInteger(ticketId) || ticketId < 1) {
+      return fail(400, { message: "Invalid ticket." });
+    }
+    const result = claimTicket(ticketId, locals.user.id);
+    if (!result.claimed) {
+      return fail(409, { message: result.owner === null ? "Ticket not found." : `Ticket already claimed by agent #${result.owner}. Refresh to see current work.` });
+    }
+    return { success: true };
+  },
+};
