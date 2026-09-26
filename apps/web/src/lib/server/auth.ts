@@ -77,7 +77,7 @@ const parseSlackMessage = (
 };
 
 let database: DatabaseSync | undefined;
-const getDatabase = (): DatabaseSync => {
+export const getDatabase = (): DatabaseSync => {
   if (database) {
     return database;
   }
@@ -87,6 +87,8 @@ const getDatabase = (): DatabaseSync => {
     );
   }
   const db = new DatabaseSync(process.env.HELPDESK_DB_PATH ?? "local.db");
+  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA journal_mode = WAL");
   db.exec(`
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS users (
@@ -131,6 +133,14 @@ const getDatabase = (): DatabaseSync => {
       assignee_id INTEGER REFERENCES users(id),
       reason TEXT NOT NULL,
       slack_error TEXT NOT NULL DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS official_replies (
+      ticket_id INTEGER PRIMARY KEY REFERENCES tickets(id),
+      agent_id INTEGER NOT NULL REFERENCES users(id),
+      body TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('sending', 'failed', 'uncertain', 'sent')),
+      slack_ts TEXT,
+      error TEXT NOT NULL DEFAULT ''
     );
   `);
   const messageSchema = db

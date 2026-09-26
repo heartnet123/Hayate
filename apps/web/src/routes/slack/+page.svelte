@@ -1,5 +1,5 @@
 <script lang="ts">
-	let { data } = $props();
+	let { data, form } = $props();
 	let supportChannel = $derived(data.slack?.channel ?? '#it-support');
 	let messages = $derived([
 		{ avatar: 'priya', body: "My VPN keeps disconnecting every few minutes. I can't access internal tools...", channel: supportChannel, id: 1, name: 'Priya Desai', time: '10:24 AM' },
@@ -57,9 +57,11 @@
 
 	<section class="panel ui-panel" aria-label="Central queue">
 		<h2>Central Queue ({data.queue?.length ?? 0} unassigned)</h2>
+		{#if form?.message}<p role="alert" class="work-feedback">{form.message}</p>{/if}
+		{#if form?.success}<p role="status" class="work-feedback">{form.message ?? 'Ticket claimed. Your work is below.'}</p>{/if}
 		{#if data.queue?.length}
 			{#each data.queue as item (item.id)}
-				<article>
+				<article class="work-item">
 					<p><strong>Ticket #{item.id}</strong> · Unassigned · Owner: {item.ownerName} ({item.ownerId}) · Source thread: {item.workspace} {item.channel} {item.threadTs}</p>
 					<p>Escalation reason: {item.reason}</p>
 					{#if item.slackError}<p role="alert">{item.slackError}</p>{/if}
@@ -68,11 +70,48 @@
 							<li><strong>{msg.userName}</strong> ({msg.messageTs}): {msg.body}</li>
 						{/each}
 					</ul>
+					<form method="POST" action="?/claim">
+						<input type="hidden" name="ticketId" value={item.id} />
+						<button type="submit" class="ui-button ui-button-primary">Claim ticket #{item.id}</button>
+					</form>
 				</article>
 			{/each}
 		{:else}
 			<p>No unassigned tickets in central queue.</p>
 		{/if}
+	</section>
+
+	<section class="panel ui-panel" aria-label="My assigned tickets">
+		<h2>My tickets ({data.assigned.length})</h2>
+		{#each data.assigned as item (item.id)}
+			<article class="work-item">
+				<h3>Ticket #{item.id} · {item.ownerName}</h3>
+				<p>Source thread: {item.workspace} {item.channel} {item.threadTs}</p>
+				<p>Escalation reason: {item.reason}</p>
+				<ul>
+					{#each item.messages as msg (msg.messageTs)}
+						<li><strong>{msg.userName}</strong> ({msg.messageTs}): {msg.body}</li>
+					{/each}
+				</ul>
+				{#if item.deliveryStatus === 'sent'}
+					<p role="status">Delivered to Slack · {item.slackTs}</p>
+					<p><strong>Official reply:</strong> {item.draft}</p>
+				{:else if item.deliveryStatus === 'uncertain' || item.deliveryStatus === 'sending'}
+					<p role="alert">Delivery not confirmed. Check the Slack thread before any further action. Do not resend.</p>
+					<p><strong>Saved draft:</strong> {item.draft}</p>
+				{:else}
+					{#if item.deliveryError}<p role="alert">{item.deliveryError}</p>{/if}
+					<form method="POST" action="?/reply" class="official-reply">
+						<input type="hidden" name="ticketId" value={item.id} />
+						<label for="official-reply-{item.id}">Official reply to {item.ownerName} in Slack</label>
+						<textarea id="official-reply-{item.id}" class="ui-field" name="body" rows="3" maxlength="4000" required>{item.draft}</textarea>
+						<button type="submit" class="ui-button ui-button-primary">Send official reply to Slack</button>
+					</form>
+				{/if}
+			</article>
+		{:else}
+			<p>No tickets assigned to you yet.</p>
+		{/each}
 	</section>
 
 	<div class="intake-grid">
@@ -120,6 +159,13 @@
 
 <style>
 	.dashboard { min-width: 0; overflow: auto; padding: 14px 23px 22px; }
+	.work-item { padding: 16px 0; border-top: 1px solid var(--ui-border); overflow-wrap: anywhere; }
+	.work-item h3 { margin: 0; color: var(--ui-text); font-size: 16px; }
+	.work-item ul { padding-left: 24px; }
+	.work-feedback { color: var(--ui-text); }
+	.official-reply { display: grid; gap: 8px; max-width: 640px; }
+	.official-reply textarea { width: 100%; resize: vertical; }
+	.official-reply button { justify-self: start; }
 	.page-heading { margin: 0 0 17px; padding: 0 7px; }
 	.settings-button { white-space: nowrap; }
 	.settings-button span { font-size: 19px; }
