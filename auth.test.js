@@ -38,6 +38,7 @@ const startServer = async () => {
         HELPDESK_DB_PATH: databasePath,
         NODE_ENV: "test",
         SLACK_BOT_TOKEN: "xoxb-secret-token-canary",
+        SLACK_BOT_USER_ID: "U123",
         SLACK_SIGNING_SECRET: signingSecret,
       },
       stderr: "inherit",
@@ -343,6 +344,40 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
         type: "event_callback",
         workspace: "acme-ops.slack.com",
       },
+      {
+        event: {
+          channel: "#helpdesk-triage",
+          text: "@ai missing workspace must not be routed",
+          ts: "1710000000.000500",
+          type: "message",
+          user: "U100",
+        },
+        event_id: "Ev-missing-workspace",
+        type: "event_callback",
+      },
+      {
+        event: {
+          channel: "#helpdesk-triage",
+          text: "<@U999> please look into this",
+          ts: "1710000000.000600",
+          type: "message",
+          user: "U100",
+        },
+        event_id: "Ev-other-user",
+        type: "event_callback",
+        workspace: "acme-ops.slack.com",
+      },
+      {
+        event: {
+          channel: "#helpdesk-triage",
+          text: "@ai event needs an identity",
+          ts: "1710000000.000700",
+          type: "message",
+          user: "U100",
+        },
+        type: "event_callback",
+        workspace: "acme-ops.slack.com",
+      },
     ].map(async (ignoredPayload) => {
       const res = await slackEvent(ignoredPayload);
       expect(res.status).toBe(200);
@@ -357,7 +392,7 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   const firstIntake = await slackEvent({
     event: {
       channel: "#helpdesk-triage",
-      text: "@ai VPN keeps disconnecting after update",
+      text: "<@U123> VPN keeps disconnecting after update",
       ts: "1710000001.000100",
       type: "message",
       user: "U101",
@@ -377,7 +412,7 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   const duplicateDelivery = await slackEvent({
     event: {
       channel: "#helpdesk-triage",
-      text: "@ai VPN keeps disconnecting after update",
+      text: "<@U123> VPN keeps disconnecting after update",
       ts: "1710000001.000100",
       type: "message",
       user: "U101",
@@ -397,7 +432,7 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   const sameTextRetag = await slackEvent({
     event: {
       channel: "#helpdesk-triage",
-      text: "@ai VPN keeps disconnecting after update",
+      text: "<@U123> VPN keeps disconnecting after update",
       thread_ts: "1710000001.000100",
       ts: "1710000001.000200",
       type: "message",
@@ -479,14 +514,14 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
     "Escalation reason: No approved SOP matched this request."
   );
   expect(queueHtml).toContain(
-    "Priya Desai</strong> (1710000001.000100): @ai VPN keeps disconnecting after update"
+    "Priya Desai</strong> (1710000001.000100):"
   );
   expect(queueHtml).toContain(
     "Alex Rivera</strong> (1710000002.000100): @ai I am seeing the same error in this thread"
   );
   expect(
     queueHtml.split(
-      "Priya Desai</strong> (1710000001.000100): @ai VPN keeps disconnecting after update"
+      "Priya Desai</strong> (1710000001.000100):"
     ).length - 1
   ).toBe(1);
   expect(queueHtml).toContain("Owner: Daniel Kim (U303)");

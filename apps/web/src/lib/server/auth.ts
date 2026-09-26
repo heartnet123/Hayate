@@ -31,7 +31,13 @@ export const validSlackWorkspace = (workspace: string) =>
 export const validSlackChannel = (channel: string) =>
   /^#[a-z0-9][a-z0-9_-]{1,79}$/u.test(channel);
 const aiMentionPattern =
-  /(?:^|\s|<)@(?:ai|helpdesk(?:[-_]?ai)?)\b|<@U[A-Z0-9]+>/iu;
+  /(?:^|\s)@(?:ai|helpdesk(?:[-_]?ai)?)\b/iu;
+const slackUserMentionPattern = /<@(?<userId>[UW][A-Z0-9]+)>/gu;
+const mentionsAi = (body: string) =>
+  aiMentionPattern.test(body) ||
+  [...body.matchAll(slackUserMentionPattern)].some(
+    (match) => match.groups?.userId === process.env.SLACK_BOT_USER_ID
+  );
 
 export interface SlackEventPayload {
   challenge?: string;
@@ -289,7 +295,8 @@ export const ingestSlackEvent = (payload: SlackEventPayload) => {
   const ev = payload.event;
   if (
     !settings.workspace ||
-    (payload.workspace && payload.workspace !== settings.workspace) ||
+    payload.workspace !== settings.workspace ||
+    !payload.event_id?.trim() ||
     !ev ||
     !ev.ts ||
     !ev.user ||
@@ -308,9 +315,7 @@ export const ingestSlackEvent = (payload: SlackEventPayload) => {
   const userId = ev.user.trim();
   const userName = (ev.user_name ?? userId).trim();
   const body = ev.text.trim();
-  const eventId = (
-    payload.event_id ?? `${settings.workspace}:${settings.channel}:${messageTs}`
-  ).trim();
+  const eventId = payload.event_id?.trim() ?? "";
   const slackError = payload.simulate_slack_error
     ? "Slack delivery failed; request queued in central queue."
     : "";
@@ -325,7 +330,7 @@ export const ingestSlackEvent = (payload: SlackEventPayload) => {
       .get(settings.workspace, settings.channel, threadTs) as
       | { id: number }
       | undefined;
-    if (!existing && !aiMentionPattern.test(body)) {
+    if (!existing && !mentionsAi(body)) {
       db.exec("COMMIT");
       return { accepted: false };
     }
