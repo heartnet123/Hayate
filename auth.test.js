@@ -38,7 +38,6 @@ const startServer = async () => {
         HELPDESK_DB_PATH: databasePath,
         NODE_ENV: "test",
         SLACK_BOT_TOKEN: "xoxb-secret-token-canary",
-        SLACK_BOT_USER_ID: "U123",
         SLACK_SIGNING_SECRET: signingSecret,
       },
       stderr: "inherit",
@@ -123,6 +122,7 @@ afterEach(async () => {
   }
   rmSync(exposedDatabasePath, { force: true });
   rmSync(exposedEnvPath, { force: true });
+  Bun.gc(true);
   rmSync(directory, { force: true, recursive: true });
 });
 
@@ -407,7 +407,7 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   const firstIntake = await slackEvent({
     event: {
       channel: "#helpdesk-triage",
-      text: "<@U123> VPN keeps disconnecting after update",
+      text: "@ai VPN keeps disconnecting after update",
       ts: "1710000001.000100",
       type: "message",
       user: "U101",
@@ -427,7 +427,7 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   const duplicateDelivery = await slackEvent({
     event: {
       channel: "#helpdesk-triage",
-      text: "<@U123> VPN keeps disconnecting after update",
+      text: "@ai VPN keeps disconnecting after update",
       ts: "1710000001.000100",
       type: "message",
       user: "U101",
@@ -447,7 +447,7 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   const sameTextRetag = await slackEvent({
     event: {
       channel: "#helpdesk-triage",
-      text: "<@U123> VPN keeps disconnecting after update",
+      text: "@ai VPN keeps disconnecting after update",
       thread_ts: "1710000001.000100",
       ts: "1710000001.000200",
       type: "message",
@@ -663,6 +663,50 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   expect(persistedQueue).toContain("Owner: Priya Desai (U101)");
   expect(persistedQueue).toContain("1710000002.000200");
   expect(persistedQueue).toContain("1710000002.000300");
+  const configuredIds = await post(
+    "/settings/slack",
+    { channel: "C123ABC456", workspace: "T123ABC456" },
+    nextAdmin.cookie
+  );
+  expect(configuredIds.status).toBe(200);
+  const canonicalPayload = {
+    event: {
+      channel: "C123ABC456",
+      text: "<@U123> canonical Slack mention",
+      ts: "1710000030.000100",
+      type: "app_mention",
+      user: "U505",
+    },
+    event_id: "Ev-canonical-1",
+    team_id: "T123ABC456",
+    type: "event_callback",
+  };
+  const realMention = await slackEvent(canonicalPayload);
+  expect(await realMention.json()).toMatchObject({
+    accepted: true,
+    queued: true,
+  });
+  const duplicateMention = await slackEvent(canonicalPayload);
+  expect(await duplicateMention.json()).toMatchObject({
+    accepted: true,
+    duplicate: true,
+  });
+  await Promise.all(
+    [
+      { ...canonicalPayload, event_id: "Ev-wrong-team", team_id: "T999ABC456" },
+      {
+        ...canonicalPayload,
+        event: { ...canonicalPayload.event, channel: "C999ABC456" },
+        event_id: "Ev-wrong-channel-id",
+      },
+    ].map(async (ignoredPayload) => {
+      const response = await slackEvent(ignoredPayload);
+      expect(await response.json()).toMatchObject({ accepted: false });
+    })
+  );
+  expect(await text(get("/slack", again.cookie))).toContain(
+    "Source thread: T123ABC456 C123ABC456 1710000030.000100"
+  );
   expect(
     await status(
       post(
@@ -694,6 +738,29 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
     `).get("1710000001.000100").count
   ).toBe(4);
   db.exec(`
+    CREATE TRIGGER fail_intake BEFORE INSERT ON tickets
+    BEGIN SELECT RAISE(ABORT, 'Confidential payroll outage body'); END;
+  `);
+  const retryPayload = {
+    ...canonicalPayload,
+    event: { ...canonicalPayload.event, ts: "1710000040.000100" },
+    event_id: "Ev-retry-after-db-failure",
+  };
+  const intakeFailure = await slackEvent(retryPayload);
+  expect(intakeFailure.status).toBe(500);
+  expect(await intakeFailure.text()).not.toContain(
+    "Confidential payroll outage body"
+  );
+  db.exec("DROP TRIGGER fail_intake");
+  const intakeRetry = await slackEvent(retryPayload);
+  expect(await intakeRetry.json()).toMatchObject({
+    accepted: true,
+    duplicate: false,
+  });
+  expect(await text(get("/slack", nextAdmin.cookie))).toContain(
+    "Source thread: T123ABC456 C123ABC456 1710000040.000100"
+  );
+  db.exec(`
     CREATE TRIGGER deny_grant BEFORE UPDATE OF role ON users BEGIN SELECT RAISE(ABORT, 'write denied'); END;
     CREATE TRIGGER deny_slack_save BEFORE UPDATE ON slack_settings BEGIN SELECT RAISE(ABORT, 'slack write denied'); END;
   `);
@@ -711,8 +778,8 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   expect(failedSlackBody).not.toContain("slack write denied");
   expect(failedSlackBody).not.toContain("Slack settings saved.");
   const unchangedSlack = await text(get("/settings/slack", nextAdmin.cookie));
-  expect(unchangedSlack).toContain("acme-ops.slack.com");
-  expect(unchangedSlack).toContain("#helpdesk-triage");
+  expect(unchangedSlack).toContain("T123ABC456");
+  expect(unchangedSlack).toContain("C123ABC456");
 
   const failed = await post(
     "/settings/roles?/change",
