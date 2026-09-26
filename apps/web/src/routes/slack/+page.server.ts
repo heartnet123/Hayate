@@ -1,4 +1,5 @@
 import { listCentralQueue } from "$lib/server/auth";
+import { sendOfficialReply } from "$lib/server/replies";
 import { claimTicket, listAssignedTickets } from "$lib/server/tickets";
 import { error, fail } from "@sveltejs/kit";
 
@@ -25,5 +26,29 @@ export const actions: Actions = {
       return fail(409, { message: result.owner === null ? "Ticket not found." : `Ticket already claimed by agent #${result.owner}. Refresh to see current work.` });
     }
     return { success: true };
+  },
+  reply: async ({ request, locals }) => {
+    if (!locals.user || locals.user.role === "revoked") {
+      error(403, "Support access required");
+    }
+    const data = await request.formData();
+    const rawId = data.get("ticketId");
+    const ticketId = Number(rawId);
+    const body = data.get("body");
+    if (typeof rawId !== "string" || !Number.isSafeInteger(ticketId) || ticketId < 1 ||
+      typeof body !== "string" || body.trim().length < 1 || body.length > 4000) {
+      return fail(400, { message: "Enter a reply of 1 to 4000 characters." });
+    }
+    const result = await sendOfficialReply(ticketId, locals.user.id, body.trim());
+    if (result.status === "forbidden") {
+      error(403, result.message);
+    }
+    if (result.status === "conflict") {
+      return fail(409, { message: result.message });
+    }
+    if (result.status !== "sent") {
+      return fail(result.status === "failed" ? 502 : 503, { message: result.message });
+    }
+    return { message: result.message, success: true };
   },
 };
