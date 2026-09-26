@@ -87,6 +87,8 @@ export const getDatabase = (): DatabaseSync => {
     );
   }
   const db = new DatabaseSync(process.env.HELPDESK_DB_PATH ?? "local.db");
+  db.exec("PRAGMA busy_timeout = 5000");
+  db.exec("PRAGMA journal_mode = WAL");
   db.exec(`
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS users (

@@ -1,7 +1,7 @@
 import { listCentralQueue } from "$lib/server/auth";
 import { sendOfficialReply } from "$lib/server/replies";
 import { claimTicket, listAssignedTickets } from "$lib/server/tickets";
-import { error, fail } from "@sveltejs/kit";
+import { error as httpError, fail } from "@sveltejs/kit";
 
 import type { Actions, PageServerLoad } from "./$types";
 
@@ -13,7 +13,7 @@ export const load: PageServerLoad = ({ locals }) => ({
 export const actions: Actions = {
   claim: async ({ request, locals }) => {
     if (!locals.user || locals.user.role === "revoked") {
-      error(403, "Support access required");
+      httpError(403, "Support access required");
     }
     const data = await request.formData();
     const rawId = data.get("ticketId");
@@ -25,7 +25,18 @@ export const actions: Actions = {
     ) {
       return fail(400, { message: "Invalid ticket." });
     }
-    const result = claimTicket(ticketId, locals.user.id);
+    let result;
+    try {
+      result = claimTicket(ticketId, locals.user.id);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        /SQLITE_BUSY|database is (?:locked|busy)/u.test(error.message)
+      ) {
+        return fail(503, { message: "Ticket is busy. Refresh and try again." });
+      }
+      throw error;
+    }
     if (!result.claimed) {
       return fail(409, {
         message:
@@ -38,7 +49,7 @@ export const actions: Actions = {
   },
   reply: async ({ request, locals }) => {
     if (!locals.user || locals.user.role === "revoked") {
-      error(403, "Support access required");
+      httpError(403, "Support access required");
     }
     const data = await request.formData();
     const rawId = data.get("ticketId");
@@ -54,13 +65,20 @@ export const actions: Actions = {
     ) {
       return fail(400, { message: "Enter a reply of 1 to 4000 characters." });
     }
-    const result = await sendOfficialReply(
-      ticketId,
-      locals.user.id,
-      body.trim()
-    );
+    let result;
+    try {
+      result = await sendOfficialReply(ticketId, locals.user.id, body.trim());
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        /SQLITE_BUSY|database is (?:locked|busy)/u.test(error.message)
+      ) {
+        return fail(503, { message: "Ticket is busy. Refresh and try again." });
+      }
+      throw error;
+    }
     if (result.status === "forbidden") {
-      error(403, result.message);
+      httpError(403, result.message);
     }
     if (result.status === "conflict") {
       return fail(409, { message: result.message });

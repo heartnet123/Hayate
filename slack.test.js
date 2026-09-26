@@ -13,11 +13,12 @@ const password = "secure-admin-password-2026";
 const port = 20_000 + Math.floor(Math.random() * 20_000);
 const address = `http://127.0.0.1:${port}`;
 let server;
+let server2;
 let mock;
 let mockMode = "reject";
 const sent = [];
-const startServer = async () => {
-  server = Bun.spawn(
+const startServer = async (atPort = port) => {
+  const running = Bun.spawn(
     [
       "node",
       "node_modules/vite/bin/vite.js",
@@ -25,7 +26,7 @@ const startServer = async () => {
       "--host",
       "127.0.0.1",
       "--port",
-      String(port),
+      String(atPort),
       "--strictPort",
     ],
     {
@@ -45,11 +46,11 @@ const startServer = async () => {
     }
   );
   const wait = async (attempt = 0) => {
-    if (attempt === 80 || server.exitCode !== null) {
+    if (attempt === 80 || running.exitCode !== null) {
       throw new Error("Vite failed to start");
     }
     try {
-      const response = await fetch(`${address}/login`);
+      const response = await fetch(`http://127.0.0.1:${atPort}/login`);
       if (response.ok) {
         return;
       }
@@ -60,16 +61,17 @@ const startServer = async () => {
     await wait(attempt + 1);
   };
   await wait();
+  return running;
 };
 
-const post = (route, fields, cookie = "") =>
-  fetch(`${address}${route}`, {
+const post = (route, fields, cookie = "", base = address) =>
+  fetch(`${base}${route}`, {
     body: new URLSearchParams(fields),
     headers: {
       accept: "text/html",
       "content-type": "application/x-www-form-urlencoded",
       cookie,
-      origin: address,
+      origin: base,
     },
     method: "POST",
     redirect: "manual",
@@ -115,6 +117,10 @@ afterAll(async () => {
     server.kill();
     await server.exited;
   }
+  if (server2) {
+    server2.kill();
+    await server2.exited;
+  }
   mock?.stop(true);
   Bun.gc(true);
   await delay(100);
@@ -134,6 +140,13 @@ test("two agents race to claim one queued thread", async () => {
       if (mockMode === "uncertain") {
         return new Response("upstream error", { status: 500 });
       }
+      if (mockMode === "rate") {
+        return new Response("rate limited", {
+          headers: { "retry-after": "1" },
+          status: 429,
+        });
+      }
+      await delay(150);
       return Response.json({
         channel: "C123ABC456",
         ok: true,
@@ -142,7 +155,7 @@ test("two agents race to claim one queued thread", async () => {
     },
     port: 0,
   });
-  await startServer();
+  server = await startServer();
   const admin = await login("admin@example.com", password);
   const settings = await post(
     "/settings/slack",
@@ -209,15 +222,23 @@ test("two agents race to claim one queued thread", async () => {
   });
   expect(sent[0].authorization).toBe("Bearer xoxb-test");
   mockMode = "success";
-  expect(
-    await status(
-      post(
-        "/slack?/reply",
-        { body: "Official answer", ticketId: "1" },
-        winnerCookie
-      )
-    )
-  ).toBe(200);
+  server2 = await startServer(port + 1);
+  const competingSends = await Promise.all([
+    post(
+      "/slack?/reply",
+      { body: "Official answer", ticketId: "1" },
+      winnerCookie
+    ),
+    post(
+      "/slack?/reply",
+      { body: "Official answer", ticketId: "1" },
+      winnerCookie,
+      `http://127.0.0.1:${port + 1}`
+    ),
+  ]);
+  expect(competingSends.map((response) => response.status).toSorted()).toEqual([
+    200, 409,
+  ]);
   expect(
     db
       .prepare(
@@ -273,10 +294,56 @@ test("two agents race to claim one queued thread", async () => {
     )
   ).toBe(409);
   expect(sent).toHaveLength(3);
+  expect(await status(intake("1710000003.000100", "Ev-rate"))).toBe(200);
+  expect(
+    await status(post("/slack?/claim", { ticketId: "3" }, winnerCookie))
+  ).toBe(200);
+  mockMode = "rate";
+  expect(
+    await status(
+      post(
+        "/slack?/reply",
+        { body: "Rate limited", ticketId: "3" },
+        winnerCookie
+      )
+    )
+  ).toBe(502);
+  expect(
+    db.prepare("SELECT status FROM official_replies WHERE ticket_id = 3").get()
+  ).toEqual({ status: "failed" });
+  mockMode = "success";
+  expect(
+    await status(
+      post(
+        "/slack?/reply",
+        { body: "Rate limited", ticketId: "3" },
+        winnerCookie
+      )
+    )
+  ).toBe(200);
+  expect(sent).toHaveLength(5);
+  expect(await status(intake("1710000004.000100", "Ev-locked"))).toBe(200);
+  const owner = db
+    .prepare("SELECT id FROM users WHERE email = ?")
+    .get(results[0].status === 200 ? "a@example.com" : "b@example.com");
+  db.exec("BEGIN IMMEDIATE");
+  db.prepare("UPDATE tickets SET assignee_id = ? WHERE id = 4").run(owner.id);
+  const lockedClaim = post(
+    "/slack?/claim",
+    { ticketId: "4" },
+    loserCookie,
+    `http://127.0.0.1:${port + 1}`
+  );
+  await delay(200);
+  db.exec("COMMIT");
+  expect(await status(lockedClaim)).toBe(409);
   db.close();
   server.kill();
   await server.exited;
-  await startServer();
+  server2.kill();
+  await server2.exited;
+  server2 = undefined;
+  server = await startServer();
   const recovered = await page(winnerCookie);
   expect(recovered).toContain("Delivered to Slack · 1710000099.000100");
   expect(recovered).toContain("Delivery not confirmed. Check the Slack thread");
@@ -290,5 +357,5 @@ test("two agents race to claim one queued thread", async () => {
       )
     )
   ).toBe(409);
-  expect(sent).toHaveLength(3);
+  expect(sent).toHaveLength(5);
 }, 30_000);

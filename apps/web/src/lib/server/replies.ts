@@ -6,6 +6,9 @@ interface SendResult {
 }
 
 const readSlackResult = async (response: Response, channel: unknown) => {
+  if (response.status === 429) {
+    return { error: "rate_limited", ts: "" };
+  }
   if (!response.ok) {
     throw new Error(
       "Slack returned an HTTP error without delivery confirmation."
@@ -20,7 +23,17 @@ const readSlackResult = async (response: Response, channel: unknown) => {
       "error" in result && typeof result.error === "string"
         ? result.error
         : "unknown_error";
-    if (code === "internal_error" || code === "fatal_error") {
+    if (
+      ![
+        "channel_not_found",
+        "invalid_auth",
+        "missing_scope",
+        "not_in_channel",
+        "no_text",
+        "rate_limited",
+        "ratelimited",
+      ].includes(code)
+    ) {
       throw new Error("Slack may have accepted the message.");
     }
     return { error: code, ts: "" };
@@ -58,23 +71,22 @@ export const sendOfficialReply = async (
       status: "forbidden",
     };
   }
-  const existing = db
-    .prepare("SELECT status FROM official_replies WHERE ticket_id = ?")
-    .get(ticketId);
-  if (existing && existing.status !== "failed") {
+  const reserved =
+    db
+      .prepare(`
+    INSERT INTO official_replies (ticket_id, agent_id, body, status, slack_ts, error)
+    VALUES (?, ?, ?, 'sending', NULL, '')
+    ON CONFLICT(ticket_id) DO UPDATE SET agent_id = excluded.agent_id, body = excluded.body,
+      status = 'sending', slack_ts = NULL, error = '' WHERE official_replies.status = 'failed'
+  `)
+      .run(ticketId, agentId, body).changes === 1;
+  if (!reserved) {
     return {
       message:
         "Reply already sent or delivery is uncertain. Do not resend until reconciled.",
       status: "conflict",
     };
   }
-  db.prepare(`
-    INSERT INTO official_replies (ticket_id, agent_id, body, status, slack_ts, error)
-    VALUES (?, ?, ?, 'sending', NULL, '')
-    ON CONFLICT(ticket_id) DO UPDATE SET agent_id = excluded.agent_id, body = excluded.body,
-      status = 'sending', slack_ts = NULL, error = '' WHERE official_replies.status = 'failed'
-  `).run(ticketId, agentId, body);
-
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) {
     db.prepare(
