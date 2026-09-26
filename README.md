@@ -31,6 +31,8 @@ Open [http://localhost:5173](http://localhost:5173). To run only the web workspa
 
 First startup requires `HELPDESK_ADMIN_EMAIL` and `HELPDESK_ADMIN_PASSWORD` (12–128 characters) in the server environment. Administrator account is created only when database has no admin; use credentials to sign in at `/login`. Administrator creates support agents under `/settings/roles` with temporary passwords, then agents sign in to see dashboard, Slack, and SOP previews. Agents cannot open settings. Roles and sessions persist in SQLite at `apps/web/local.db` by default; set `HELPDESK_DB_PATH` to a writable persistent path in production. Protect database files and environment variables; do not store credentials in browser-side config or commit them. Use a persistent Node.js deployment with writable disk, not ephemeral serverless storage. `node:sqlite` requires Node.js 22.13+ (Node.js 24 recommended).
 
+For Slack Events API intake, set `SLACK_SIGNING_SECRET` on the server and configure the **team ID** (`T...`) as workspace and the **channel ID** (`C...` or `G...`) as support channel under `/settings/slack`. Slack delivers these IDs, not workspace and channel names; previously saved names must be replaced with IDs before real `app_mention` events can be routed. Subscribe the Slack app to `app_mention` for the configured channel. Neither signing secret nor bot token belongs in the settings form.
+
 ## Project layout
 
 ```text

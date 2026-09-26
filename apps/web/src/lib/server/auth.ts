@@ -29,12 +29,13 @@ export const validPassword = (password: string) =>
 export const validSlackWorkspace = (workspace: string) =>
   /^[a-zA-Z0-9][a-zA-Z0-9_-]{1,62}(?:\.slack\.com)?$/u.test(workspace);
 export const validSlackChannel = (channel: string) =>
-  /^#[a-z0-9][a-z0-9_-]{1,79}$/u.test(channel);
+  /^(?:#[a-z0-9][a-z0-9_-]{1,79}|[CG][A-Z0-9]{8,})$/u.test(channel);
 const aiMentionPattern =
-  /(?:^|\s|<)@(?:ai|helpdesk(?:[-_]?ai)?)\b|<@U[A-Z0-9]+>/iu;
+  /(?:^|\s)@(?:ai|helpdesk(?:[-_]?ai)?)\b/iu;
 
 export interface SlackEventPayload {
   challenge?: string;
+  team_id?: string;
   event?: {
     bot_id?: string;
     channel?: string;
@@ -51,6 +52,29 @@ export interface SlackEventPayload {
   type?: string;
   workspace?: string;
 }
+
+const parseSlackMessage = (
+  payload: SlackEventPayload,
+  settings: { workspace: string; channel: string }
+) => {
+  const { event } = payload;
+  const messageTs = event?.ts?.trim();
+  const userId = event?.user?.trim();
+  const body = event?.text?.trim();
+  if (!event || !messageTs || !userId || !body) {
+    return null;
+  }
+  const validEnvelope = [
+    Boolean(settings.workspace),
+    (payload.team_id ?? payload.workspace) === settings.workspace,
+    Boolean(payload.event_id?.trim()),
+    event.type === "message" || event.type === "app_mention",
+    !event.bot_id,
+    !event.subtype,
+    event.channel === settings.channel,
+  ].every(Boolean);
+  return validEnvelope ? { body, event, messageTs, userId } : null;
+};
 
 let database: DatabaseSync | undefined;
 const getDatabase = (): DatabaseSync => {
@@ -99,8 +123,7 @@ const getDatabase = (): DatabaseSync => {
       user_id TEXT NOT NULL,
       user_name TEXT NOT NULL,
       body TEXT NOT NULL,
-      UNIQUE(request_id, message_ts),
-      UNIQUE(request_id, user_id, body)
+      UNIQUE(request_id, message_ts)
     );
     CREATE TABLE IF NOT EXISTS tickets (
       id INTEGER PRIMARY KEY,
@@ -110,6 +133,33 @@ const getDatabase = (): DatabaseSync => {
       slack_error TEXT NOT NULL DEFAULT ''
     );
   `);
+  const messageSchema = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'slack_messages'")
+    .get() as { sql: string };
+  if (messageSchema.sql.includes("UNIQUE(request_id, user_id, body)")) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(`
+        CREATE TABLE slack_messages_new (
+          id INTEGER PRIMARY KEY,
+          request_id INTEGER NOT NULL REFERENCES slack_requests(id),
+          event_id TEXT NOT NULL UNIQUE,
+          message_ts TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          user_name TEXT NOT NULL,
+          body TEXT NOT NULL,
+          UNIQUE(request_id, message_ts)
+        );
+        INSERT INTO slack_messages_new SELECT * FROM slack_messages;
+        DROP TABLE slack_messages;
+        ALTER TABLE slack_messages_new RENAME TO slack_messages;
+        COMMIT;
+      `);
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   if (!db.prepare("SELECT id FROM users WHERE role = ? LIMIT 1").get("admin")) {
     const email = process.env.HELPDESK_ADMIN_EMAIL?.trim().toLowerCase();
     const password = process.env.HELPDESK_ADMIN_PASSWORD;
@@ -286,31 +336,14 @@ export const verifySlackSignature = (
 
 export const ingestSlackEvent = (payload: SlackEventPayload) => {
   const settings = getSlackSettings();
-  const ev = payload.event;
-  if (
-    !settings.workspace ||
-    (payload.workspace && payload.workspace !== settings.workspace) ||
-    !ev ||
-    !ev.ts ||
-    !ev.user ||
-    !ev.text ||
-    [
-      ev.type === "message",
-      !ev.bot_id,
-      !ev.subtype,
-      ev.channel === settings.channel,
-    ].includes(false)
-  ) {
+  const message = parseSlackMessage(payload, settings);
+  if (!message) {
     return { accepted: false };
   }
-  const messageTs = ev.ts.trim();
-  const threadTs = (ev.thread_ts ?? messageTs).trim();
-  const userId = ev.user.trim();
-  const userName = (ev.user_name ?? userId).trim();
-  const body = ev.text.trim();
-  const eventId = (
-    payload.event_id ?? `${settings.workspace}:${settings.channel}:${messageTs}`
-  ).trim();
+  const { event, messageTs, userId, body } = message;
+  const threadTs = (event.thread_ts ?? messageTs).trim();
+  const userName = (event.user_name ?? userId).trim();
+  const eventId = payload.event_id?.trim() ?? "";
   const slackError = payload.simulate_slack_error
     ? "Slack delivery failed; request queued in central queue."
     : "";
@@ -325,9 +358,14 @@ export const ingestSlackEvent = (payload: SlackEventPayload) => {
       .get(settings.workspace, settings.channel, threadTs) as
       | { id: number }
       | undefined;
-    if (!existing && !aiMentionPattern.test(body)) {
+    const mentioned = event.type === "app_mention" || aiMentionPattern.test(body);
+    if (!existing && !mentioned) {
       db.exec("COMMIT");
       return { accepted: false };
+    }
+    if (existing && mentioned) {
+      db.exec("COMMIT");
+      return { accepted: true, duplicate: true, queued: true };
     }
     const requestRow =
       existing ??
