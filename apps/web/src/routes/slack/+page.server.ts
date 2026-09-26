@@ -18,12 +18,21 @@ export const actions: Actions = {
     const data = await request.formData();
     const rawId = data.get("ticketId");
     const ticketId = Number(rawId);
-    if (typeof rawId !== "string" || !Number.isSafeInteger(ticketId) || ticketId < 1) {
+    if (
+      typeof rawId !== "string" ||
+      !Number.isSafeInteger(ticketId) ||
+      ticketId < 1
+    ) {
       return fail(400, { message: "Invalid ticket." });
     }
     const result = claimTicket(ticketId, locals.user.id);
     if (!result.claimed) {
-      return fail(409, { message: result.owner === null ? "Ticket not found." : `Ticket already claimed by agent #${result.owner}. Refresh to see current work.` });
+      return fail(409, {
+        message:
+          result.owner === null
+            ? "Ticket not found."
+            : `Ticket already claimed by agent #${result.owner}. Refresh to see current work.`,
+      });
     }
     return { success: true };
   },
@@ -35,11 +44,21 @@ export const actions: Actions = {
     const rawId = data.get("ticketId");
     const ticketId = Number(rawId);
     const body = data.get("body");
-    if (typeof rawId !== "string" || !Number.isSafeInteger(ticketId) || ticketId < 1 ||
-      typeof body !== "string" || body.trim().length < 1 || body.length > 4000) {
+    if (
+      typeof rawId !== "string" ||
+      !Number.isSafeInteger(ticketId) ||
+      ticketId < 1 ||
+      typeof body !== "string" ||
+      body.trim().length < 1 ||
+      body.length > 4000
+    ) {
       return fail(400, { message: "Enter a reply of 1 to 4000 characters." });
     }
-    const result = await sendOfficialReply(ticketId, locals.user.id, body.trim());
+    const result = await sendOfficialReply(
+      ticketId,
+      locals.user.id,
+      body.trim()
+    );
     if (result.status === "forbidden") {
       error(403, result.message);
     }
@@ -47,7 +66,9 @@ export const actions: Actions = {
       return fail(409, { message: result.message });
     }
     if (result.status !== "sent") {
-      return fail(result.status === "failed" ? 502 : 503, { message: result.message });
+      return fail(result.status === "failed" ? 502 : 503, {
+        message: result.message,
+      });
     }
     return { message: result.message, success: true };
   },
