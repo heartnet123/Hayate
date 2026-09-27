@@ -19,12 +19,14 @@ Existing dashboard panels use 12px gaps, 16px ticket-row padding, 8px form gaps.
 ## 5. Components
 
 ### Support ticket panel
+
 - **Structure:** semantic section with heading, ticket articles, and scoped forms.
 - **Variants/states:** empty list has plain message; selected work displays notes; errors use `role="alert"`; success uses `role="status"`.
 - **Accessibility:** ticket ID in heading, form input labelled by ID, keyboard-operable submit, visible focus inherited from existing controls.
 - **Motion/layout:** no new motion; existing scroll container owns overflow. Existing `.ui-panel`/`.ui-button`/`.ui-field` are reused.
 
 ### Note composer
+
 - **Structure:** label, textarea, submit button inside a ticket article; internal-only label and helper copy distinguish it from official Slack reply.
 - **States:** empty/default, focus, validation error preserving body, save failure preserving body, successful submission with new entry. Native required/max-length browser validation supplements server validation.
 - **Spacing:** existing 8px form gap and 16px ticket-row padding. No new reusable component abstraction.

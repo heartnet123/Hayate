@@ -132,15 +132,18 @@ test("internal notes storage keeps author and timestamp without sending replies"
   process.env.HELPDESK_ADMIN_EMAIL = "admin@example.com";
   process.env.HELPDESK_ADMIN_PASSWORD = password;
   const { getDatabase } = await import("./apps/web/src/lib/server/auth.ts");
-  const { addInternalNote, listSupportTickets } = await import(
-    "./apps/web/src/lib/server/tickets.ts"
-  );
+  const { addInternalNote, listSupportTickets } =
+    await import("./apps/web/src/lib/server/tickets.ts");
   const db = getDatabase();
   db.prepare(
     "INSERT INTO slack_requests (id, workspace, channel, thread_ts, owner_id, owner_name) VALUES (1, 'T123', 'C123', '1.0', 'U123', 'Requester')"
   ).run();
-  db.prepare("INSERT INTO tickets (id, request_id, reason) VALUES (1, 1, 'Help')").run();
-  const adminId = db.prepare("SELECT id FROM users WHERE role = 'admin'").get().id;
+  db.prepare(
+    "INSERT INTO tickets (id, request_id, reason) VALUES (1, 1, 'Help')"
+  ).run();
+  const adminId = db
+    .prepare("SELECT id FROM users WHERE role = 'admin'")
+    .get().id;
 
   expect(addInternalNote(1, adminId, "Private context")).toBe(true);
   expect(addInternalNote(999, adminId, "Missing ticket")).toBe(false);
@@ -151,7 +154,9 @@ test("internal notes storage keeps author and timestamp without sending replies"
   expect(tickets[0].notes[0].createdAt).toMatch(
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u
   );
-  expect(db.prepare("SELECT count(*) AS total FROM official_replies").get().total).toBe(0);
+  expect(
+    db.prepare("SELECT count(*) AS total FROM official_replies").get().total
+  ).toBe(0);
   expect(sent).toHaveLength(0);
   db.close();
 });
@@ -208,7 +213,9 @@ test("two agents race to claim one queued thread", async () => {
   expect(
     `${intakeResponse.status}: ${await intakeResponse.text()}`
   ).toStartWith("200:");
-  expect(await status(post("/slack?/note", { body: "no access", ticketId: "1" }))).toBe(401);
+  expect(
+    await status(post("/slack?/note", { body: "no access", ticketId: "1" }))
+  ).toBe(401);
   expect(await status(fetch(`${address}/slack/__data.json`))).toBe(401);
   const invalidNote = await post(
     "/slack?/note",
@@ -216,28 +223,61 @@ test("two agents race to claim one queued thread", async () => {
     a
   );
   expect(invalidNote.status).toBe(400);
-  expect(await invalidNote.text()).toContain("Enter a note of 1 to 4000 characters.");
-  const emptyId = await post("/slack?/note", { body: "Draft", ticketId: "" }, a);
+  expect(await invalidNote.text()).toContain(
+    "Enter a note of 1 to 4000 characters."
+  );
+  const emptyId = await post(
+    "/slack?/note",
+    { body: "Draft", ticketId: "" },
+    a
+  );
   expect(emptyId.status).toBe(400);
-  expect(await emptyId.text()).toContain("Draft");
-  const missingNote = await post("/slack?/note", { body: "Draft", ticketId: "999" }, a);
+  expect(await emptyId.text()).toContain("Unsaved internal note: Draft</p>");
+  const missingNote = await post(
+    "/slack?/note",
+    { body: "Draft", ticketId: "999" },
+    a
+  );
   expect(missingNote.status).toBe(404);
-  expect(await missingNote.text()).toContain("Draft");
+  expect(await missingNote.text()).toContain(
+    "Unsaved internal note: Draft</p>"
+  );
   const noteDb = new DatabaseSync(dbPath);
   noteDb.exec(`
     CREATE TRIGGER block_internal_notes BEFORE INSERT ON internal_notes
     BEGIN SELECT RAISE(FAIL, 'blocked write'); END;
   `);
-  const failedNote = await post("/slack?/note", { body: "Keep draft", ticketId: "1" }, a);
+  const failedNote = await post(
+    "/slack?/note",
+    { body: "Keep draft", ticketId: "1" },
+    a
+  );
   expect(failedNote.status).toBe(500);
-  expect(await failedNote.text()).toContain("Keep draft");
+  expect(await failedNote.text()).toContain(">Keep draft</textarea>");
   noteDb.exec("DROP TRIGGER block_internal_notes");
   noteDb.close();
-  expect(await status(post("/slack?/note", { body: "Agent-only context", ticketId: "1" }, a))).toBe(200);
+  expect(
+    await status(
+      post("/slack?/note", { body: "Agent-only context", ticketId: "1" }, a)
+    )
+  ).toBe(200);
   expect(await page(b)).toContain("Agent-only context");
+  expect(await page(b)).toContain("Add internal note to ticket #1");
+  expect(
+    await status(
+      post("/slack?/note", { body: "Second agent follow-up", ticketId: "1" }, b)
+    )
+  ).toBe(200);
+  expect(await page(a)).toContain("Second agent follow-up");
   const privateDb = new DatabaseSync(dbPath);
-  expect(privateDb.prepare("SELECT count(*) AS total FROM official_replies").get().total).toBe(0);
-  expect(privateDb.prepare("SELECT count(*) AS total FROM internal_notes").get().total).toBe(1);
+  expect(
+    privateDb.prepare("SELECT count(*) AS total FROM official_replies").get()
+      .total
+  ).toBe(0);
+  expect(
+    privateDb.prepare("SELECT count(*) AS total FROM internal_notes").get()
+      .total
+  ).toBe(2);
   privateDb.close();
   expect(sent).toHaveLength(0);
   expect(await page(a)).toContain("Central Queue (1 unassigned)");
@@ -406,6 +446,8 @@ test("two agents race to claim one queued thread", async () => {
   server2 = undefined;
   server = await startServer();
   const recovered = await page(winnerCookie);
+  expect(recovered).toContain("Agent-only context");
+  expect(recovered).toContain("Second agent follow-up");
   expect(recovered).toContain("Delivered to Slack · 1710000099.000100");
   expect(recovered).toContain("Delivery not confirmed. Check the Slack thread");
   expect(recovered).toContain("Saved draft:</strong> Uncertain answer");
@@ -419,8 +461,27 @@ test("two agents race to claim one queued thread", async () => {
     )
   ).toBe(409);
   expect(sent).toHaveLength(5);
-  const revokedEmail = results[0].status === 200 ? "b@example.com" : "a@example.com";
-  expect(await status(post("/settings/roles?/change", { email: revokedEmail, role: "revoked" }, admin))).toBe(200);
-  expect(await status(post("/slack?/note", { body: "revoked", ticketId: "1" }, loserCookie))).toBe(401);
-  expect(await status(fetch(`${address}/slack/__data.json`, { headers: { cookie: loserCookie } }))).toBe(401);
+  const revokedEmail =
+    results[0].status === 200 ? "b@example.com" : "a@example.com";
+  expect(
+    await status(
+      post(
+        "/settings/roles?/change",
+        { email: revokedEmail, role: "revoked" },
+        admin
+      )
+    )
+  ).toBe(200);
+  expect(
+    await status(
+      post("/slack?/note", { body: "revoked", ticketId: "1" }, loserCookie)
+    )
+  ).toBe(401);
+  expect(
+    await status(
+      fetch(`${address}/slack/__data.json`, {
+        headers: { cookie: loserCookie },
+      })
+    )
+  ).toBe(401);
 }, 30_000);
