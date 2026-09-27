@@ -1,6 +1,11 @@
 import { listCentralQueue } from "$lib/server/auth";
 import { sendOfficialReply } from "$lib/server/replies";
-import { addInternalNote, claimTicket, listAssignedTickets, listSupportTickets } from "$lib/server/tickets";
+import {
+  addInternalNote,
+  claimTicket,
+  listAssignedTickets,
+  listSupportTickets,
+} from "$lib/server/tickets";
 import { error as httpError, fail } from "@sveltejs/kit";
 
 import type { Actions, PageServerLoad } from "./$types";
@@ -70,17 +75,29 @@ export const actions: Actions = {
       body.trim().length < 1 ||
       body.length > 4000
     ) {
-      return fail(400, { body: draft, message: "Enter a note of 1 to 4000 characters.", ticketId });
+      return fail(400, {
+        body: draft,
+        message: "Enter a note of 1 to 4000 characters.",
+        ticketId,
+      });
     }
     try {
       if (!addInternalNote(ticketId, locals.user.id, body.trim())) {
-        return fail(404, { body: draft, message: "Ticket not found or access denied.", ticketId });
+        return fail(404, {
+          body: draft,
+          message: "Ticket not found or access denied.",
+          ticketId,
+        });
       }
     } catch (error) {
-      const busy = error instanceof Error && /SQLITE_BUSY|database is (?:locked|busy)/u.test(error.message);
+      const busy =
+        error instanceof Error &&
+        /SQLITE_BUSY|database is (?:locked|busy)/u.test(error.message);
       return fail(busy ? 503 : 500, {
         body: draft,
-        message: busy ? "Ticket is busy. Try again." : "Could not save note. Try again.",
+        message: busy
+          ? "Ticket is busy. Try again."
+          : "Could not save note. Try again.",
         ticketId,
       });
     }

@@ -87,7 +87,11 @@ export const listSupportTickets = () => {
     }));
 };
 
-export const addInternalNote = (ticketId: number, authorId: number, body: string) =>
+export const addInternalNote = (
+  ticketId: number,
+  authorId: number,
+  body: string
+) =>
   getDatabase()
     .prepare(`
       INSERT INTO internal_notes (ticket_id, author_id, body)
