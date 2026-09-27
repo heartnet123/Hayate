@@ -1,14 +1,20 @@
 import { listCentralQueue } from "$lib/server/auth";
 import { sendOfficialReply } from "$lib/server/replies";
-import { claimTicket, listAssignedTickets } from "$lib/server/tickets";
+import { addInternalNote, claimTicket, listAssignedTickets, listSupportTickets } from "$lib/server/tickets";
 import { error as httpError, fail } from "@sveltejs/kit";
 
 import type { Actions, PageServerLoad } from "./$types";
 
-export const load: PageServerLoad = ({ locals }) => ({
-  assigned: listAssignedTickets(locals.user?.id ?? -1),
-  queue: listCentralQueue(),
-});
+export const load: PageServerLoad = ({ locals }) => {
+  if (!locals.user || locals.user.role === "revoked") {
+    httpError(403, "Support access required");
+  }
+  return {
+    assigned: listAssignedTickets(locals.user.id),
+    queue: listCentralQueue(),
+    supportTickets: listSupportTickets(),
+  };
+};
 
 export const actions: Actions = {
   claim: async ({ request, locals }) => {
@@ -46,6 +52,39 @@ export const actions: Actions = {
       });
     }
     return { success: true };
+  },
+  note: async ({ request, locals }) => {
+    if (!locals.user || locals.user.role === "revoked") {
+      httpError(403, "Support access required");
+    }
+    const data = await request.formData();
+    const rawId = data.get("ticketId");
+    const ticketId = Number(rawId);
+    const body = data.get("body");
+    const draft = typeof body === "string" ? body : "";
+    if (
+      typeof rawId !== "string" ||
+      !Number.isSafeInteger(ticketId) ||
+      ticketId < 1 ||
+      typeof body !== "string" ||
+      body.trim().length < 1 ||
+      body.length > 4000
+    ) {
+      return fail(400, { body: draft, message: "Enter a note of 1 to 4000 characters.", ticketId });
+    }
+    try {
+      if (!addInternalNote(ticketId, locals.user.id, body.trim())) {
+        return fail(404, { body: draft, message: "Ticket not found or access denied.", ticketId });
+      }
+    } catch (error) {
+      const busy = error instanceof Error && /SQLITE_BUSY|database is (?:locked|busy)/u.test(error.message);
+      return fail(busy ? 503 : 500, {
+        body: draft,
+        message: busy ? "Ticket is busy. Try again." : "Could not save note. Try again.",
+        ticketId,
+      });
+    }
+    return { message: "Internal note saved.", success: true, ticketId };
   },
   reply: async ({ request, locals }) => {
     if (!locals.user || locals.user.role === "revoked") {
