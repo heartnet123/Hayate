@@ -60,3 +60,10 @@ temp
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
 .*/
+
+# Local-only files — keep untracked
+.zcodeignore
+/CONTEXT.md
+/docs/agents/
+AGENTS.md
+opencode.json
