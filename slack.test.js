@@ -127,6 +127,35 @@ afterAll(async () => {
   rmSync(directory, { force: true, recursive: true });
 });
 
+test("internal notes storage keeps author and timestamp without sending replies", async () => {
+  process.env.HELPDESK_DB_PATH = path.join(directory, "notes-storage.db");
+  process.env.HELPDESK_ADMIN_EMAIL = "admin@example.com";
+  process.env.HELPDESK_ADMIN_PASSWORD = password;
+  const { getDatabase } = await import("./apps/web/src/lib/server/auth.ts");
+  const { addInternalNote, listSupportTickets } = await import(
+    "./apps/web/src/lib/server/tickets.ts"
+  );
+  const db = getDatabase();
+  db.prepare(
+    "INSERT INTO slack_requests (id, workspace, channel, thread_ts, owner_id, owner_name) VALUES (1, 'T123', 'C123', '1.0', 'U123', 'Requester')"
+  ).run();
+  db.prepare("INSERT INTO tickets (id, request_id, reason) VALUES (1, 1, 'Help')").run();
+  const adminId = db.prepare("SELECT id FROM users WHERE role = 'admin'").get().id;
+
+  expect(addInternalNote(1, adminId, "Private context")).toBe(true);
+  expect(addInternalNote(999, adminId, "Missing ticket")).toBe(false);
+  const tickets = listSupportTickets();
+  expect(tickets[0].notes).toMatchObject([
+    { author: "admin@example.com", body: "Private context" },
+  ]);
+  expect(tickets[0].notes[0].createdAt).toMatch(
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u
+  );
+  expect(db.prepare("SELECT count(*) AS total FROM official_replies").get().total).toBe(0);
+  expect(sent).toHaveLength(0);
+  db.close();
+});
+
 test("two agents race to claim one queued thread", async () => {
   mock = Bun.serve({
     async fetch(request) {
