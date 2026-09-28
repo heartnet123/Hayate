@@ -4,14 +4,14 @@
 
 An interactive help desk interface prototype built with SvelteKit. Administrators manage staff access; support metrics, Slack intake, SOP drafting, and other configuration screens use sample data.
 
-> [!IMPORTANT] This remains a UI demo except for sign-in, Roles & Permissions, Slack workspace/channel configuration, signed Slack request intake, ticket claiming, and official replies. Metrics, sample messages, SOP drafts, and other settings are examples.
+> [!IMPORTANT] This remains a UI demo except for sign-in, Roles & Permissions, Slack workspace/channel configuration, signed Slack request intake, ticket claiming, internal ticket notes, and official replies. Metrics, sample messages, SOP drafts, and other settings are examples.
 
 ## Explore the demo
 
 | Route | What you can explore |
 | --- | --- |
 | `/` | Dashboard with ticket trends, categories, CSAT, AI insight examples, and recent tickets. |
-| `/slack` | Unassigned central queue from signed `/slack/events` requests, claim actions, your assigned tickets and official Slack-thread replies. Sample conversations and triage below remain previews. |
+| `/slack` | Unassigned central queue from signed `/slack/events` requests, claim actions, your assigned tickets and official Slack-thread replies, and shared internal notes for all support tickets. Sample conversations and triage below remain previews. |
 | `/sop` | A sample ticket and editable SOP title and sections, with reviewer and publish controls. |
 | `/settings` | Admin-only: manage support agents in Roles & Permissions and configure the Slack workspace and support channel in Slack Integration. Other tabs remain previews. |
 
@@ -34,6 +34,8 @@ First startup requires `HELPDESK_ADMIN_EMAIL` and `HELPDESK_ADMIN_PASSWORD` (12â
 For Slack Events API intake, set `SLACK_SIGNING_SECRET` on the server and configure the **team ID** (`T...`) as workspace and the **channel ID** (`C...` or `G...`) as support channel under `/settings/slack`. Slack delivers these IDs, not workspace and channel names; previously saved names must be replaced with IDs before real `app_mention` events can be routed. Subscribe the Slack app to `app_mention` for the configured channel. Neither signing secret nor bot token belongs in the settings form.
 
 To send official replies, set `SLACK_BOT_TOKEN` on the server to a bot token with `chat:write` in the source channel. Only the current ticket assignee can send. A Slack rejection saves a retryable draft; transport errors or restarts during an attempt leave delivery **unconfirmed** and block repeat sends until the thread is checked manually. The page marks a reply delivered only after Slack returns a matching channel and message timestamp. Only one official reply per ticket is supported; the sample conversation composer is never sent to Slack.
+
+Active support agents and admins can read and add internal notes on any ticket in the Support ticket notes section of `/slack`. Notes include author and time, persist in the SQLite database, and never go to Slack or change the official reply. Only signed-in staff can access this section, including direct server requests; Slack requesters have no staff access.
 
 ## Project layout
 

@@ -142,6 +142,13 @@ export const getDatabase = (): DatabaseSync => {
       slack_ts TEXT,
       error TEXT NOT NULL DEFAULT ''
     );
+    CREATE TABLE IF NOT EXISTS internal_notes (
+      id INTEGER PRIMARY KEY,
+      ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+      author_id INTEGER NOT NULL REFERENCES users(id),
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
   `);
   const messageSchema = db
     .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'slack_messages'")

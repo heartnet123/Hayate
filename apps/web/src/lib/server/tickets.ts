@@ -58,3 +58,44 @@ export const listAssignedTickets = (agentId: number) => {
     workspace: String(row.workspace),
   }));
 };
+
+export const listSupportTickets = () => {
+  const db = getDatabase();
+  const notes = db.prepare(`
+    SELECT internal_notes.id, internal_notes.body, internal_notes.created_at AS createdAt,
+      users.email AS author
+    FROM internal_notes JOIN users ON users.id = internal_notes.author_id
+    WHERE internal_notes.ticket_id = ? ORDER BY internal_notes.created_at, internal_notes.id
+  `);
+  return db
+    .prepare(`
+      SELECT tickets.id, tickets.reason, slack_requests.owner_name AS ownerName
+      FROM tickets JOIN slack_requests ON slack_requests.id = tickets.request_id
+      ORDER BY tickets.id DESC
+    `)
+    .all()
+    .map((ticket) => ({
+      id: Number(ticket.id),
+      notes: notes.all(Number(ticket.id)).map((note) => ({
+        author: String(note.author),
+        body: String(note.body),
+        createdAt: String(note.createdAt),
+        id: Number(note.id),
+      })),
+      ownerName: String(ticket.ownerName),
+      reason: String(ticket.reason),
+    }));
+};
+
+export const addInternalNote = (
+  ticketId: number,
+  authorId: number,
+  body: string
+) =>
+  getDatabase()
+    .prepare(`
+      INSERT INTO internal_notes (ticket_id, author_id, body)
+      SELECT tickets.id, users.id, ? FROM tickets JOIN users ON users.id = ?
+      WHERE tickets.id = ? AND users.role IN ('admin', 'agent')
+    `)
+    .run(body, authorId, ticketId).changes === 1;

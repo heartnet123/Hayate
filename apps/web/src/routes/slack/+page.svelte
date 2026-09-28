@@ -57,8 +57,8 @@
 
 	<section class="panel ui-panel" aria-label="Central queue">
 		<h2>Central Queue ({data.queue?.length ?? 0} unassigned)</h2>
-		{#if form?.message}<p role="alert" class="work-feedback">{form.message}</p>{/if}
-		{#if form?.success}<p role="status" class="work-feedback">{form.message ?? 'Ticket claimed. Your work is below.'}</p>{/if}
+		{#if form?.message && form?.ticketId == null}<p role="alert" class="work-feedback">{form.message}</p>{/if}
+		{#if form?.success && form?.ticketId == null}<p role="status" class="work-feedback">{form.message ?? 'Ticket claimed. Your work is below.'}</p>{/if}
 		{#if data.queue?.length}
 			{#each data.queue as item (item.id)}
 				<article class="work-item">
@@ -114,6 +114,39 @@
 		{/each}
 	</section>
 
+	<section class="panel ui-panel" aria-label="Support ticket notes">
+		<h2>Support ticket notes ({data.supportTickets.length})</h2>
+		<p>Internal to IT support. Notes here are never sent to Slack or the requester.</p>
+		{#if form?.message && form?.body !== undefined && !data.supportTickets.some((ticket) => ticket.id === form.ticketId)}
+			<p role="alert" class="work-feedback">{form.message}</p>
+			<p class="unsaved-note">Unsaved internal note: {form.body}</p>
+		{/if}
+		{#each data.supportTickets as item (item.id)}
+			<article class="work-item" id="ticket-{item.id}">
+				<h3>Ticket #{item.id} · {item.ownerName}</h3>
+				<p>Escalation reason: {item.reason}</p>
+				{#if item.notes.length}
+					<ul class="note-list">
+						{#each item.notes as note (note.id)}
+							<li><strong>{note.author}</strong> · <time datetime={note.createdAt}>{note.createdAt.replace('T', ' ').replace('Z', ' UTC')}</time><p>{note.body}</p></li>
+						{/each}
+					</ul>
+				{:else}
+					<p>No internal notes yet.</p>
+				{/if}
+				{#if form?.ticketId === item.id && form?.message}<p role={form?.success ? 'status' : 'alert'} class="work-feedback">{form.message}</p>{/if}
+				<form method="POST" action="?/note#ticket-{item.id}" class="note-form">
+					<input type="hidden" name="ticketId" value={item.id} />
+					<label for="internal-note-{item.id}">Add internal note to ticket #{item.id}</label>
+					<textarea id="internal-note-{item.id}" class="ui-field" name="body" rows="3" maxlength="4000" required>{form?.ticketId === item.id ? form?.body ?? '' : ''}</textarea>
+					<button type="submit" class="ui-button ui-button-primary">Save internal note</button>
+				</form>
+			</article>
+		{:else}
+			<p>No tickets to annotate yet.</p>
+		{/each}
+	</section>
+
 	<div class="intake-grid">
 		<section class="panel ui-panel inbox-panel">
 			<div class="inbox-heading"><h2>Incoming Messages</h2><span class="live-pill ui-badge">Sample</span><label class="channel-select"><select class="ui-field" aria-label="Filter messages by channel" bind:value={selectedChannel} onchange={() => { replyDraft = ''; replyNotice = ''; ticketCreated = false; }}><option>All channels</option><option>{supportChannel}</option><option>#general</option><option>#engineering</option><option>#hr</option></select></label></div>
@@ -163,9 +196,13 @@
 	.work-item h3 { margin: 0; color: var(--ui-text); font-size: 16px; }
 	.work-item ul { padding-left: 24px; }
 	.work-feedback { color: var(--ui-text); }
-	.official-reply { display: grid; gap: 8px; max-width: 640px; }
-	.official-reply textarea { width: 100%; resize: vertical; }
-	.official-reply button { justify-self: start; }
+	.note-list li { margin-bottom: 12px; font-size: 14px; }
+	.note-list time { color: var(--ui-muted); }
+	.note-list p { margin: 4px 0 0; }
+	.note-list p, .unsaved-note { white-space: pre-wrap; }
+	.note-form, .official-reply { display: grid; gap: 8px; max-width: 640px; }
+	.note-form textarea, .official-reply textarea { width: 100%; resize: vertical; }
+	.note-form button, .official-reply button { justify-self: start; }
 	.page-heading { margin: 0 0 17px; padding: 0 7px; }
 	.settings-button { white-space: nowrap; }
 	.settings-button span { font-size: 19px; }
