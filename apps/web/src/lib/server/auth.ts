@@ -34,6 +34,15 @@ export const validSlackChannel = (channel: string) =>
 export const validSlackIdentity = (workspace: string, slackUserId: string) =>
   /^T[A-Z0-9]+$/u.test(workspace) && /^[UW][A-Z0-9]+$/u.test(slackUserId);
 const aiMentionPattern = /(?:^|\s)@(?:ai|helpdesk(?:[-_]?ai)?)\b/iu;
+const humanMessageSubtypes = new Set([
+  "thread_broadcast",
+  "file_share",
+  "me_message",
+]);
+const validSlackTimestamp = (value: string): boolean =>
+  /^\d+\.\d{1,6}$/u.test(value) &&
+  Number(value) > 0 &&
+  !Number.isNaN(new Date(Number(value) * 1000).getTime());
 
 export interface SlackEventPayload {
   challenge?: string;
@@ -60,22 +69,31 @@ const parseSlackMessage = (
   settings: { workspace: string; channel: string }
 ) => {
   const { event } = payload;
-  const messageTs = event?.ts?.trim();
-  const userId = event?.user?.trim();
-  const body = event?.text?.trim();
-  if (!event || !messageTs || !userId || !body) {
+  const messageTs = typeof event?.ts === "string" ? event.ts.trim() : "";
+  const userId = typeof event?.user === "string" ? event.user.trim() : "";
+  const body = typeof event?.text === "string" ? event.text.trim() : "";
+  const threadTs =
+    typeof event?.thread_ts === "string" ? event.thread_ts.trim() : messageTs;
+  if (
+    !event ||
+    !userId ||
+    !body ||
+    !validSlackTimestamp(messageTs) ||
+    !validSlackTimestamp(threadTs)
+  ) {
     return null;
   }
   const validEnvelope = [
     Boolean(settings.workspace),
     (payload.team_id ?? payload.workspace) === settings.workspace,
-    Boolean(payload.event_id?.trim()),
+    typeof payload.event_id === "string" && Boolean(payload.event_id.trim()),
     event.type === "message" || event.type === "app_mention",
     !event.bot_id,
-    !event.subtype,
+    !event.subtype || humanMessageSubtypes.has(event.subtype),
+    event.thread_ts === undefined || typeof event.thread_ts === "string",
     event.channel === settings.channel,
   ].every(Boolean);
-  return validEnvelope ? { body, event, messageTs, userId } : null;
+  return validEnvelope ? { body, event, messageTs, threadTs, userId } : null;
 };
 
 let database: DatabaseSync | undefined;
@@ -133,6 +151,7 @@ export const getDatabase = (): DatabaseSync => {
       user_id TEXT NOT NULL,
       user_name TEXT NOT NULL,
       body TEXT NOT NULL,
+      official_agent_id INTEGER REFERENCES users(id),
       UNIQUE(request_id, message_ts)
     );
     CREATE TABLE IF NOT EXISTS tickets (
@@ -140,7 +159,8 @@ export const getDatabase = (): DatabaseSync => {
       request_id INTEGER NOT NULL UNIQUE REFERENCES slack_requests(id),
       assignee_id INTEGER REFERENCES users(id),
       reason TEXT NOT NULL,
-      slack_error TEXT NOT NULL DEFAULT ''
+      slack_error TEXT NOT NULL DEFAULT '',
+      assigned_at REAL
     );
     CREATE TABLE IF NOT EXISTS official_replies (
       ticket_id INTEGER PRIMARY KEY REFERENCES tickets(id),
@@ -158,14 +178,14 @@ export const getDatabase = (): DatabaseSync => {
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     );
   `);
-  const messageSchema = db
-    .prepare(
-      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'slack_messages'"
-    )
-    .get() as { sql: string };
-  if (messageSchema.sql.includes("UNIQUE(request_id, user_id, body)")) {
-    db.exec("BEGIN IMMEDIATE");
-    try {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const messageSchema = db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'slack_messages'"
+      )
+      .get() as { sql: string };
+    if (messageSchema.sql.includes("UNIQUE(request_id, user_id, body)")) {
       db.exec(`
         CREATE TABLE slack_messages_new (
           id INTEGER PRIMARY KEY,
@@ -175,17 +195,48 @@ export const getDatabase = (): DatabaseSync => {
           user_id TEXT NOT NULL,
           user_name TEXT NOT NULL,
           body TEXT NOT NULL,
+          official_agent_id INTEGER REFERENCES users(id),
           UNIQUE(request_id, message_ts)
         );
-        INSERT INTO slack_messages_new SELECT * FROM slack_messages;
+        INSERT INTO slack_messages_new (id, request_id, event_id, message_ts, user_id, user_name, body)
+          SELECT id, request_id, event_id, message_ts, user_id, user_name, body FROM slack_messages;
         DROP TABLE slack_messages;
         ALTER TABLE slack_messages_new RENAME TO slack_messages;
-        COMMIT;
       `);
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
     }
+    if (
+      !db
+        .prepare("PRAGMA table_info(slack_messages)")
+        .all()
+        .some((column) => column.name === "official_agent_id")
+    ) {
+      db.exec(
+        "ALTER TABLE slack_messages ADD COLUMN official_agent_id INTEGER REFERENCES users(id)"
+      );
+    }
+    if (
+      !db
+        .prepare("PRAGMA table_info(tickets)")
+        .all()
+        .some((column) => column.name === "assigned_at")
+    ) {
+      db.exec("ALTER TABLE tickets ADD COLUMN assigned_at REAL");
+    }
+    db.exec(`
+      UPDATE tickets SET assigned_at = unixepoch('now', 'subsec')
+        WHERE assignee_id IS NOT NULL AND assigned_at IS NULL;
+      CREATE TRIGGER IF NOT EXISTS ticket_assignment_time
+      AFTER UPDATE OF assignee_id ON tickets
+      WHEN OLD.assignee_id IS NOT NEW.assignee_id
+      BEGIN
+        UPDATE tickets SET assigned_at = CASE WHEN NEW.assignee_id IS NULL
+          THEN NULL ELSE unixepoch('now', 'subsec') END WHERE id = NEW.id;
+      END;
+      COMMIT;
+    `);
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
   }
   if (!db.prepare("SELECT id FROM users WHERE role = ? LIMIT 1").get("admin")) {
     const email = process.env.HELPDESK_ADMIN_EMAIL?.trim().toLowerCase();
@@ -416,9 +467,9 @@ export const ingestSlackEvent = (payload: SlackEventPayload) => {
   if (!message) {
     return { accepted: false };
   }
-  const { event, messageTs, userId, body } = message;
-  const threadTs = (event.thread_ts ?? messageTs).trim();
-  const userName = (event.user_name ?? userId).trim();
+  const { event, messageTs, threadTs, userId, body } = message;
+  const userName =
+    typeof event.user_name === "string" ? event.user_name.trim() : userId;
   const eventId = payload.event_id?.trim() ?? "";
   const slackError = payload.simulate_slack_error
     ? "Slack delivery failed; request queued in central queue."
@@ -429,18 +480,33 @@ export const ingestSlackEvent = (payload: SlackEventPayload) => {
   try {
     const existing = db
       .prepare(
-        "SELECT id FROM slack_requests WHERE workspace = ? AND channel = ? AND thread_ts = ?"
+        "SELECT id, owner_id AS ownerId FROM slack_requests WHERE workspace = ? AND channel = ? AND thread_ts = ?"
       )
       .get(settings.workspace, settings.channel, threadTs) as
-      | { id: number }
+      | { id: number; ownerId: string }
       | undefined;
+    const officialAssignee =
+      existing && existing.ownerId !== userId
+        ? (db
+            .prepare(`
+              SELECT tickets.assignee_id AS agentId FROM tickets
+              JOIN users ON users.id = tickets.assignee_id
+              JOIN slack_identities ON slack_identities.user_id = users.id
+              WHERE tickets.request_id = ? AND users.role IN ('admin', 'agent')
+                AND slack_identities.workspace = ? AND slack_identities.slack_user_id = ?
+                AND CAST(? AS REAL) >= tickets.assigned_at
+            `)
+            .get(existing.id, settings.workspace, userId, messageTs) as
+            | { agentId: number }
+            | undefined)
+        : undefined;
     const mentioned =
       event.type === "app_mention" || aiMentionPattern.test(body);
     if (!existing && !mentioned) {
       db.exec("COMMIT");
       return { accepted: false };
     }
-    if (existing && mentioned) {
+    if (existing && mentioned && !officialAssignee) {
       db.exec("COMMIT");
       return { accepted: true, duplicate: true, queued: true };
     }
@@ -460,10 +526,17 @@ export const ingestSlackEvent = (payload: SlackEventPayload) => {
     const duplicate =
       db
         .prepare(
-          "INSERT INTO slack_messages (request_id, event_id, message_ts, user_id, user_name, body) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
+          "INSERT INTO slack_messages (request_id, event_id, message_ts, user_id, user_name, body, official_agent_id) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING"
         )
-        .run(requestRow.id, eventId, messageTs, userId, userName, body)
-        .changes === 0;
+        .run(
+          requestRow.id,
+          eventId,
+          messageTs,
+          userId,
+          userName,
+          body,
+          officialAssignee?.agentId ?? null
+        ).changes === 0;
     db.prepare(
       "INSERT INTO tickets (request_id, assignee_id, reason, slack_error) VALUES (?, NULL, ?, ?) ON CONFLICT(request_id) DO UPDATE SET slack_error = CASE WHEN excluded.slack_error != '' THEN excluded.slack_error ELSE tickets.slack_error END"
     ).run(requestRow.id, "No approved SOP matched this request.", slackError);

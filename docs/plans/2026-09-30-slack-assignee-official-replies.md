@@ -23,7 +23,7 @@ Out of scope: Slack OAuth, automatic matching by email/display name, reassignmen
 
 The administrator binds an active staff account to a Slack team ID and member ID. Each workspace/member pair belongs to at most one account. Staff and unauthenticated callers cannot edit bindings. Empty bindings remove a mapping; malformed/duplicate mappings fail visibly.
 
-Add nullable `official_agent_id` to existing `slack_messages`; its value is captured only during the first successful insert. Existing `user_id`, `user_name`, `message_ts`, and body are already immutable snapshots. A sender qualifies only when the trusted mapping identifies the active current assignee, the sender is not the requester, and the message belongs to the source thread. Bot/subtype events remain excluded. Duplicate events never promote older messages or rewrite authors.
+Add nullable `official_agent_id` to existing `slack_messages`; its value is captured only during the first successful insert. Existing `user_id`, `user_name`, `message_ts`, and body are already immutable snapshots. A sender qualifies only when the trusted mapping identifies the active current assignee, the sender is not the requester, and the message belongs to the source thread. Bot and lifecycle events remain excluded. New human text messages with `thread_broadcast`, `file_share`, or `me_message` subtypes follow the same controls; attachments are not rendered. Duplicate events never promote older messages or rewrite authors.
 
 Track the start time of the current assignment in SQLite so a delayed pre-assignment message cannot become official. Existing assigned tickets start eligibility at migration time; old messages are never retroactively classified. Assignment changes update this timestamp without adding a new reassignment feature.
 
@@ -43,7 +43,7 @@ Verification: `bun test auth.test.js`, fresh app-local `bun run check-types`, `n
 
 ### Phase 2 — `feat(slack): record immutable official thread replies`
 
-Scope/files: `apps/web/src/lib/server/auth.ts`, `slack.test.js`, focused storage/migration tests if needed.
+Scope/files: `apps/web/src/lib/server/auth.ts`, `slack.test.js`, focused storage/migration tests if needed, and this plan's event-type clarification from Slack's official reference.
 
 Migrate Slack messages with nullable official author and tickets with assignment time. Classify new inserts inside the existing transaction. Process assignee messages containing mentions without creating extra tickets. Preserve original author/time and dedupe event IDs and source timestamps. Validate timestamps used for official attribution. Tests use real signed events to prove multiple assignee replies, exclusion of requester/other staff/participants/bots, invalid signatures, duplicates across assignment changes, and delayed pre-assignment exclusion. Existing app-send reservation and notes remain untouched.
 
