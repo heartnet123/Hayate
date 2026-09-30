@@ -15,6 +15,7 @@ export interface User {
 }
 
 type StoredUser = User & { password_hash: string; salt: string };
+type StaffAccount = User & { slackUserId: string; slackWorkspace: string };
 
 const sessionDuration = 60 * 60 * 24 * 7;
 const hashPassword = (password: string, salt: string) =>
@@ -30,8 +31,9 @@ export const validSlackWorkspace = (workspace: string) =>
   /^[a-zA-Z0-9][a-zA-Z0-9_-]{1,62}(?:\.slack\.com)?$/u.test(workspace);
 export const validSlackChannel = (channel: string) =>
   /^(?:#[a-z0-9][a-z0-9_-]{1,79}|[CG][A-Z0-9]{8,})$/u.test(channel);
-const aiMentionPattern =
-  /(?:^|\s)@(?:ai|helpdesk(?:[-_]?ai)?)\b/iu;
+export const validSlackIdentity = (workspace: string, slackUserId: string) =>
+  /^T[A-Z0-9]+$/u.test(workspace) && /^[UW][A-Z0-9]+$/u.test(slackUserId);
+const aiMentionPattern = /(?:^|\s)@(?:ai|helpdesk(?:[-_]?ai)?)\b/iu;
 
 export interface SlackEventPayload {
   challenge?: string;
@@ -108,6 +110,12 @@ export const getDatabase = (): DatabaseSync => {
       workspace TEXT NOT NULL,
       channel TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS slack_identities (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id),
+      workspace TEXT NOT NULL,
+      slack_user_id TEXT NOT NULL,
+      UNIQUE(workspace, slack_user_id)
+    );
     CREATE TABLE IF NOT EXISTS slack_requests (
       id INTEGER PRIMARY KEY,
       workspace TEXT NOT NULL,
@@ -151,7 +159,9 @@ export const getDatabase = (): DatabaseSync => {
     );
   `);
   const messageSchema = db
-    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'slack_messages'")
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'slack_messages'"
+    )
     .get() as { sql: string };
   if (messageSchema.sql.includes("UNIQUE(request_id, user_id, body)")) {
     db.exec("BEGIN IMMEDIATE");
@@ -263,10 +273,59 @@ export const cookie = {
   },
 } as const;
 
-export const listUsers = (): User[] =>
+export const listUsers = (): StaffAccount[] =>
   getDatabase()
-    .prepare("SELECT id, email, role FROM users ORDER BY email")
-    .all() as unknown as User[];
+    .prepare(`
+      SELECT users.id, users.email, users.role,
+        COALESCE(slack_identities.workspace, '') AS slackWorkspace,
+        COALESCE(slack_identities.slack_user_id, '') AS slackUserId
+      FROM users LEFT JOIN slack_identities ON slack_identities.user_id = users.id
+      ORDER BY users.email
+    `)
+    .all() as unknown as StaffAccount[];
+
+export const setSlackIdentity = (
+  userId: number,
+  workspace: string,
+  slackUserId: string
+): boolean => {
+  if (
+    !Number.isSafeInteger(userId) ||
+    userId <= 0 ||
+    ((workspace || slackUserId) && !validSlackIdentity(workspace, slackUserId))
+  ) {
+    return false;
+  }
+  const db = getDatabase();
+  if (!workspace && !slackUserId) {
+    if (
+      !db
+        .prepare(
+          "SELECT id FROM users WHERE id = ? AND role IN ('admin', 'agent')"
+        )
+        .get(userId)
+    ) {
+      return false;
+    }
+    db.prepare("DELETE FROM slack_identities WHERE user_id = ?").run(userId);
+    return true;
+  }
+  return (
+    db
+      .prepare(`
+      INSERT INTO slack_identities (user_id, workspace, slack_user_id)
+      SELECT users.id, ?, ? FROM users
+      WHERE users.id = ? AND users.role IN ('admin', 'agent')
+        AND NOT EXISTS (
+          SELECT 1 FROM slack_identities
+          WHERE workspace = ? AND slack_user_id = ? AND user_id != users.id
+        )
+      ON CONFLICT(user_id) DO UPDATE SET
+        workspace = excluded.workspace, slack_user_id = excluded.slack_user_id
+    `)
+      .run(workspace, slackUserId, userId, workspace, slackUserId).changes === 1
+  );
+};
 
 export const createAgent = (email: string, password: string): boolean => {
   if (!validEmail(email) || !validPassword(password)) {
@@ -375,7 +434,8 @@ export const ingestSlackEvent = (payload: SlackEventPayload) => {
       .get(settings.workspace, settings.channel, threadTs) as
       | { id: number }
       | undefined;
-    const mentioned = event.type === "app_mention" || aiMentionPattern.test(body);
+    const mentioned =
+      event.type === "app_mention" || aiMentionPattern.test(body);
     if (!existing && !mentioned) {
       db.exec("COMMIT");
       return { accepted: false };
