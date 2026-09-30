@@ -75,4 +75,6 @@ Baseline: `bun test` 11 pass / 594 assertions. Fresh typecheck 0 errors / 7 exis
 
 Inspect final status/diff/history against phase boundaries, excluding protected docs. Check no debug code, temporary artifacts or uncommitted implementation. Repeat independent ponytail review (delete/stdlib/native/YAGNI/shrink) until no actionable findings. Slash-command skill is unavailable; run equivalent explicit review through an independent reviewer. No push, PR or issue closure requested.
 
+Phase 2 adjustment: split schema and lifecycle into `sop-schema.ts` and `sop-lifecycle.ts` so storage remains focused and under 250 nonblank lines. Split HTTP lifecycle tests into `sop-lifecycle.test.js`. Schema initialization uses an immediate transaction to serialize concurrent cold starts; these files remain in the same logical lifecycle commit.
+
 Planning complete. User explicitly authorized planning through implementation, verification and phase commits.

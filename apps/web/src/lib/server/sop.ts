@@ -1,14 +1,39 @@
 import { getDatabase } from "$lib/server/auth";
+import { ensureSopSchema } from "$lib/server/sop-schema";
 
 export const SOP_TITLE_MAX_LENGTH = 200;
 export const SOP_BODY_MAX_LENGTH = 20_000;
 
-export interface SopDraft {
+export type SopStatus = "draft" | "active" | "withdrawn";
+
+export interface Sop {
+  readonly activeVersionId: number | null;
   readonly body: string;
   readonly id: number;
   readonly revision: number;
-  readonly status: "draft";
+  readonly status: SopStatus;
   readonly title: string;
+}
+
+export interface SopVersion {
+  readonly body: string;
+  readonly createdAt: string;
+  readonly id: number;
+  readonly sopId: number;
+  readonly title: string;
+}
+
+export interface SopLifecycleEvent {
+  readonly action: "approved" | "withdrawn";
+  readonly actorEmail: string;
+  readonly createdAt: string;
+  readonly id: number;
+  readonly versionId: number | null;
+}
+
+export interface SopDetail extends Sop {
+  readonly activeVersion: SopVersion | null;
+  readonly events: readonly SopLifecycleEvent[];
 }
 
 export interface SaveSopDraftInput {
@@ -24,79 +49,100 @@ export type SaveSopDraftResult =
   | { readonly kind: "conflict" }
   | { readonly kind: "forbidden" };
 
-let schemaReady = false;
+const isStatus = (value: unknown): value is SopStatus =>
+  value === "draft" || value === "active" || value === "withdrawn";
 
-const ensureSchema = (): void => {
-  if (schemaReady) {
-    return;
+const parseSop = (value: unknown): Sop => {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("id" in value) ||
+    typeof value.id !== "number" ||
+    !("revision" in value) ||
+    typeof value.revision !== "number" ||
+    !("title" in value) ||
+    typeof value.title !== "string" ||
+    !("body" in value) ||
+    typeof value.body !== "string" ||
+    !("status" in value) ||
+    !isStatus(value.status) ||
+    !("activeVersionId" in value) ||
+    (value.activeVersionId !== null &&
+      typeof value.activeVersionId !== "number")
+  ) {
+    throw new TypeError("Invalid SOP row");
   }
-  getDatabase().exec(`
-    CREATE TABLE IF NOT EXISTS sops (
-      id INTEGER PRIMARY KEY,
-      title TEXT NOT NULL,
-      body TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'draft'
-        CHECK (status IN ('draft', 'active', 'withdrawn')),
-      revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
-      created_by INTEGER NOT NULL REFERENCES users(id),
-      updated_by INTEGER NOT NULL REFERENCES users(id),
-      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-    );
-  `);
-  schemaReady = true;
+  return {
+    activeVersionId: value.activeVersionId,
+    body: value.body,
+    id: value.id,
+    revision: value.revision,
+    status: value.status,
+    title: value.title,
+  };
 };
 
-const isSopDraft = (value: unknown): value is SopDraft =>
-  typeof value === "object" &&
-  value !== null &&
-  "id" in value &&
-  typeof value.id === "number" &&
-  Number.isSafeInteger(value.id) &&
-  "revision" in value &&
-  typeof value.revision === "number" &&
-  Number.isSafeInteger(value.revision) &&
-  "title" in value &&
-  typeof value.title === "string" &&
-  "body" in value &&
-  typeof value.body === "string" &&
-  "status" in value &&
-  value.status === "draft";
+const sopSelect = `SELECT id, title, body, status, revision,
+  active_version_id AS activeVersionId FROM sops`;
 
-const parseSopDraft = (value: unknown): SopDraft => {
-  if (!isSopDraft(value)) {
-    throw new TypeError("Invalid SOP draft row");
-  }
-  return value;
-};
-
-export const listSopDrafts = (): readonly SopDraft[] => {
-  ensureSchema();
+export const listSops = (): readonly Sop[] => {
+  ensureSopSchema();
   return getDatabase()
-    .prepare(
-      `SELECT id, title, body, status, revision
-       FROM sops
-       WHERE status = 'draft'
-       ORDER BY updated_at DESC, id DESC`
-    )
+    .prepare(`${sopSelect} ORDER BY updated_at DESC, id DESC`)
     .all()
-    .map(parseSopDraft);
+    .map(parseSop);
 };
 
-export const getSopDraft = (id: number): SopDraft | null => {
-  ensureSchema();
-  const row = getDatabase()
+export const getSop = (id: number): SopDetail | null => {
+  ensureSopSchema();
+  const database = getDatabase();
+  const row = database.prepare(`${sopSelect} WHERE id = ?`).get(id);
+  if (row === undefined) {
+    return null;
+  }
+  const sop = parseSop(row);
+  const activeVersionRow =
+    sop.activeVersionId === null
+      ? undefined
+      : database
+          .prepare(
+            `SELECT id, sop_id AS sopId, title, body, created_at AS createdAt
+             FROM sop_versions WHERE id = ?`
+          )
+          .get(sop.activeVersionId);
+  const activeVersion =
+    activeVersionRow === undefined
+      ? null
+      : {
+          body: String(activeVersionRow.body),
+          createdAt: String(activeVersionRow.createdAt),
+          id: Number(activeVersionRow.id),
+          sopId: Number(activeVersionRow.sopId),
+          title: String(activeVersionRow.title),
+        };
+  const events = database
     .prepare(
-      `SELECT id, title, body, status, revision
-       FROM sops
-       WHERE id = ? AND status = 'draft'`
+      `SELECT id, version_id AS versionId, actor_email AS actorEmail, action,
+        created_at AS createdAt FROM sop_events WHERE sop_id = ? ORDER BY id DESC`
     )
-    .get(id);
-  return row === undefined ? null : parseSopDraft(row);
+    .all(id)
+    .map((event): SopLifecycleEvent => {
+      if (event.action !== "approved" && event.action !== "withdrawn") {
+        throw new TypeError("Invalid SOP lifecycle event");
+      }
+      return {
+        action: event.action,
+        actorEmail: String(event.actorEmail),
+        createdAt: String(event.createdAt),
+        id: Number(event.id),
+        versionId: event.versionId === null ? null : Number(event.versionId),
+      };
+    });
+  return { ...sop, activeVersion, events };
 };
 
 export const saveSopDraft = (input: SaveSopDraftInput): SaveSopDraftResult => {
-  ensureSchema();
+  ensureSopSchema();
   const database = getDatabase();
   if (input.id === null || input.revision === null) {
     const result = database
@@ -120,8 +166,8 @@ export const saveSopDraft = (input: SaveSopDraftInput): SaveSopDraftResult => {
       `UPDATE sops
        SET title = ?, body = ?, revision = revision + 1, updated_by = ?,
            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE id = ? AND revision = ? AND status = 'draft'
-          AND EXISTS (SELECT 1 FROM users WHERE id = ? AND role IN ('admin', 'agent'))`
+       WHERE id = ? AND revision = ?
+         AND EXISTS (SELECT 1 FROM users WHERE id = ? AND role IN ('admin', 'agent'))`
     )
     .run(
       input.title,
@@ -134,14 +180,8 @@ export const saveSopDraft = (input: SaveSopDraftInput): SaveSopDraftResult => {
   if (result.changes === 1) {
     return { id: input.id, kind: "saved" };
   }
-  if (
-    !database
-      .prepare(
-        "SELECT id FROM users WHERE id = ? AND role IN ('admin', 'agent')"
-      )
-      .get(input.actorId)
-  ) {
-    return { kind: "forbidden" };
-  }
-  return { kind: "conflict" };
+  const activeStaff = database
+    .prepare("SELECT id FROM users WHERE id = ? AND role IN ('admin', 'agent')")
+    .get(input.actorId);
+  return activeStaff ? { kind: "conflict" } : { kind: "forbidden" };
 };

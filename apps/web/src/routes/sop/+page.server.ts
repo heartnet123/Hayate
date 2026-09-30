@@ -1,10 +1,15 @@
 import {
-  getSopDraft,
-  listSopDrafts,
+  getSop,
+  listSops,
   saveSopDraft,
   SOP_BODY_MAX_LENGTH,
   SOP_TITLE_MAX_LENGTH,
 } from "$lib/server/sop";
+import { approveSop, withdrawSop } from "$lib/server/sop-lifecycle";
+import type {
+  SopLifecycleInput,
+  SopLifecycleResult,
+} from "$lib/server/sop-lifecycle";
 import { error as httpError, fail, redirect } from "@sveltejs/kit";
 
 import type { Actions, PageServerLoad } from "./$types";
@@ -14,6 +19,56 @@ const positiveInteger = (value: string): number | null => {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 };
 
+const moderation = async (
+  request: Request,
+  actorId: number,
+  operation: (input: SopLifecycleInput) => SopLifecycleResult
+) => {
+  const form = await request.formData();
+  const rawId = form.get("id");
+  const rawRevision = form.get("revision");
+  const rawTitle = form.get("title");
+  const rawBody = form.get("body");
+  const attempted = {
+    body: typeof rawBody === "string" ? rawBody : "",
+    id: typeof rawId === "string" ? rawId : "",
+    revision: typeof rawRevision === "string" ? rawRevision : "",
+    title: typeof rawTitle === "string" ? rawTitle : "",
+  };
+  const sopId = positiveInteger(attempted.id);
+  const revision = positiveInteger(attempted.revision);
+  if (
+    sopId === null ||
+    revision === null ||
+    typeof rawTitle !== "string" ||
+    typeof rawBody !== "string"
+  ) {
+    return fail(400, {
+      ...attempted,
+      message: "Invalid SOP lifecycle request.",
+    });
+  }
+  let result;
+  try {
+    result = operation({ actorId, revision, sopId });
+  } catch {
+    return fail(500, {
+      ...attempted,
+      message: "Unable to update SOP lifecycle. Try again.",
+    });
+  }
+  if (result.kind === "forbidden") {
+    return fail(403, { ...attempted, message: "Admin access required" });
+  }
+  if (result.kind === "conflict") {
+    return fail(409, {
+      ...attempted,
+      message: "SOP changed since it was loaded. Refresh and try again.",
+    });
+  }
+  redirect(303, `/sop?id=${sopId}`);
+};
+
 export const load: PageServerLoad = ({ locals, url }) => {
   if (!locals.user || locals.user.role === "revoked") {
     httpError(403, "Support access required");
@@ -21,19 +76,25 @@ export const load: PageServerLoad = ({ locals, url }) => {
   const rawId = url.searchParams.get("id");
   const selectedId = rawId === null ? null : positiveInteger(rawId);
   if (rawId !== null && selectedId === null) {
-    httpError(400, "Invalid SOP draft");
+    httpError(400, "Invalid SOP");
   }
   try {
     return {
-      selected: selectedId === null ? null : getSopDraft(selectedId),
-      sops: listSopDrafts(),
+      selected: selectedId === null ? null : getSop(selectedId),
+      sops: listSops(),
     };
   } catch {
-    httpError(500, "Unable to load SOP drafts");
+    httpError(500, "Unable to load SOPs");
   }
 };
 
 export const actions: Actions = {
+  approve: ({ locals, request }) => {
+    if (locals.user?.role !== "admin") {
+      httpError(403, "Admin access required");
+    }
+    return moderation(request, locals.user.id, approveSop);
+  },
   save: async ({ locals, request }) => {
     if (!locals.user || locals.user.role === "revoked") {
       httpError(403, "Support access required");
@@ -93,5 +154,11 @@ export const actions: Actions = {
       });
     }
     redirect(303, `/sop?id=${result.id}`);
+  },
+  withdraw: ({ locals, request }) => {
+    if (locals.user?.role !== "admin") {
+      httpError(403, "Admin access required");
+    }
+    return moderation(request, locals.user.id, withdrawSop);
   },
 };
