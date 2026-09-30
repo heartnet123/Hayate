@@ -6,6 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 
+const officialReplyEntryPattern = /<li(?:\s[^>]*)?>(?<entry>[\s\S]*?)<\/li>/gu;
 const directory = mkdtempSync(path.join(tmpdir(), "helpdesk-replies-"));
 const dbPath = path.join(directory, "tickets.db");
 const secret = "slack-signing-secret-canary";
@@ -589,11 +590,45 @@ test("signed Slack assignee replies preserve history, identity, dedupe, and priv
     const history = () =>
       db
         .prepare(
-          "SELECT official_agent_id AS authorId, users.email AS author, body, message_ts AS timestamp FROM slack_messages JOIN users ON users.id = slack_messages.official_agent_id WHERE request_id = ? ORDER BY slack_messages.id"
+          "SELECT official_agent_id AS authorId, users.email AS author, body, message_ts AS timestamp, user_id AS slackUserId, user_name AS slackUserName FROM slack_messages JOIN users ON users.id = slack_messages.official_agent_id WHERE request_id = ? ORDER BY slack_messages.id"
         )
         .all(ticket.request_id);
     const messageCount = () =>
       db.prepare("SELECT count(*) AS total FROM slack_messages").get().total;
+    const officialList = (html, replies) => {
+      const list = html
+        .split(
+          `aria-label="Official Slack replies for ticket #${ticket.id}"`
+        )[1]
+        ?.split("</ol>")[0];
+      expect(list).toBeDefined();
+      expect(list).not.toContain(privateNote);
+      const entries = Array.from(
+        list.matchAll(officialReplyEntryPattern),
+        (match) => match.groups.entry
+      );
+      expect(entries).toHaveLength(replies.length);
+      for (const [index, reply] of replies
+        .toSorted(
+          (left, right) => Number(left.timestamp) - Number(right.timestamp)
+        )
+        .entries()) {
+        const entry = entries[index];
+        const createdAt = new Date(
+          Number(reply.timestamp) * 1000
+        ).toISOString();
+        expect(entry).toContain(`${reply.author}</strong>`);
+        expect(entry).toContain(
+          `${reply.slackUserName} (${reply.slackUserId})`
+        );
+        expect(entry).toContain(`datetime="${createdAt}"`);
+        expect(entry).toContain(
+          createdAt.replace("T", " ").replace("Z", " UTC")
+        );
+        expect(entry).toContain(reply.body.replace("<@U123> ", ""));
+      }
+      return list;
+    };
     const firstTs = assignedAt.toFixed(6);
     await deliver("Ev-history-first", { ts: firstTs });
     await deliver("Ev-history-mention", {
@@ -678,6 +713,27 @@ test("signed Slack assignee replies preserve history, identity, dedupe, and priv
       )
       .get().message_ts;
     expect(history()).toEqual(originalHistory);
+    const sharedHistory = await page(c);
+    expect(sharedHistory).toContain('aria-label="Support ticket history"');
+    expect(sharedHistory).toContain("Official replies from Slack</h4>");
+    expect(sharedHistory).toContain("Internal notes</h4>");
+    const initialList = officialList(sharedHistory, originalHistory);
+    expect(initialList.split("Assigned agent answer")).toHaveLength(2);
+    for (const body of [
+      "Requester follow-up",
+      "Other staff follow-up",
+      "Unlinked user follow-up",
+      "Display-name spoof follow-up",
+      "Delayed preclaim message",
+    ]) {
+      expect(initialList).not.toContain(body);
+    }
+    const internalNotes = sharedHistory
+      .split(`id="ticket-${ticket.id}"`)[1]
+      ?.split("Internal notes</h4>")[1]
+      ?.split("</ul>")[0];
+    expect(internalNotes).toContain(privateNote);
+    expect(internalNotes).not.toContain("Assigned agent answer");
     const beforeIgnored = messageCount();
     await Promise.all(
       [
@@ -755,6 +811,19 @@ test("signed Slack assignee replies preserve history, identity, dedupe, and priv
       user: "U555EEE555",
     });
     expect(history()).toEqual(originalHistory);
+    const unchangedList = officialList(await page(c), originalHistory);
+    expect(unchangedList).not.toContain("U555EEE555");
+    await Promise.all(
+      ["", a].map(async (cookie) => {
+        const response = await fetch(`${address}/slack/__data.json`, {
+          headers: { cookie },
+        });
+        expect(response.status).toBe(401);
+        const body = await response.text();
+        expect(body).not.toContain("Assigned agent answer");
+        expect(body).not.toContain(privateNote);
+      })
+    );
 
     db.prepare("UPDATE tickets SET assignee_id = ? WHERE id = ?").run(
       agentC.id,
@@ -831,11 +900,14 @@ test("signed Slack assignee replies preserve history, identity, dedupe, and priv
     ).toBe(0);
     expect(sent).toHaveLength(sentBefore);
 
+    const beforeRestartList = officialList(await page(c), durableHistory);
+    expect(beforeRestartList).not.toContain("U555EEE555");
     server.kill();
     await server.exited;
     server = await startServer();
     const recovered = await page(c);
     expect(history()).toEqual(durableHistory);
+    expect(officialList(recovered, durableHistory)).toBe(beforeRestartList);
     for (const reply of durableHistory) {
       expect(recovered).toContain(reply.body.replace("<@U123> ", ""));
       expect(recovered).toContain(reply.timestamp);

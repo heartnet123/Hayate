@@ -14,16 +14,23 @@ Existing stack: Inter then system sans-serif. Ticket headings 16px bold; body an
 
 ## 4. Spacing & Layout
 
-Existing dashboard panels use 12px gaps, 16px ticket-row padding, 8px form gaps. Main content scrolls in `.dashboard`; shared notes must remain in that scroll owner and wrap long text without horizontal overflow. One column on narrow viewports.
+Existing dashboard panels use 12px gaps, 16px ticket-row padding, 8px form gaps. Main content scrolls in `.dashboard`; shared ticket history must remain in that scroll owner and wrap long text without horizontal overflow. One column on narrow viewports.
 
 ## 5. Components
 
 ### Support ticket panel
 
-- **Structure:** semantic section with heading, ticket articles, and scoped forms.
-- **Variants/states:** empty list has plain message; selected work displays notes; errors use `role="alert"`; success uses `role="status"`.
+- **Structure:** Support ticket history section with ticket articles, separate Official replies from Slack and Internal notes subheadings, and scoped note forms.
+- **Variants/states:** empty list has plain message; each ticket displays official Slack replies and internal notes separately; errors use `role="alert"`; success uses `role="status"`.
 - **Accessibility:** ticket ID in heading, form input labelled by ID, keyboard-operable submit, visible focus inherited from existing controls.
 - **Motion/layout:** no new motion; existing scroll container owns overflow. Existing `.ui-panel`/`.ui-button`/`.ui-field` are reused.
+
+### Official reply history
+
+- **Structure:** per-ticket `h4` labelled Official replies from Slack, followed by a chronological list. Each entry displays saved staff email, original Slack member/name, UTC source time in a `<time>` element, and body.
+- **States:** plain empty-state text when no official Slack replies exist; show saved entries after persistence, without optimistic display.
+- **Attribution:** display the recorded author independently of the current assignee or identity mapping. Internal notes remain under their own `h4` and keep their existing composer.
+- **Layout:** reuse ticket and note-list styles, readable body text, muted metadata, and long-text wrapping. No new motion or nested decorative cards.
 
 ### Note composer
 

@@ -114,9 +114,9 @@
 		{/each}
 	</section>
 
-	<section class="panel ui-panel" aria-label="Support ticket notes">
-		<h2>Support ticket notes ({data.supportTickets.length})</h2>
-		<p>Internal to IT support. Notes here are never sent to Slack or the requester.</p>
+	<section class="panel ui-panel" aria-label="Support ticket history">
+		<h2>Support ticket history ({data.supportTickets.length})</h2>
+		<p>Official Slack replies and internal notes. Internal notes are never sent to Slack or the requester.</p>
 		{#if form?.message && form?.body !== undefined && !data.supportTickets.some((ticket) => ticket.id === form.ticketId)}
 			<p role="alert" class="work-feedback">{form.message}</p>
 			<p class="unsaved-note">Unsaved internal note: {form.body}</p>
@@ -125,6 +125,17 @@
 			<article class="work-item" id="ticket-{item.id}">
 				<h3>Ticket #{item.id} · {item.ownerName}</h3>
 				<p>Escalation reason: {item.reason}</p>
+				<h4>Official replies from Slack</h4>
+				{#if item.officialReplies.length}
+					<ol class="note-list" aria-label="Official Slack replies for ticket #{item.id}">
+						{#each item.officialReplies as reply (reply.id)}
+							<li><strong>{reply.author}</strong> · Slack: {reply.slackUserName} ({reply.slackUserId}) · <time datetime={reply.createdAt}>{reply.createdAt.replace('T', ' ').replace('Z', ' UTC')}</time><p>{reply.body}</p></li>
+						{/each}
+					</ol>
+				{:else}
+					<p>No official replies from Slack yet.</p>
+				{/if}
+				<h4>Internal notes</h4>
 				{#if item.notes.length}
 					<ul class="note-list">
 						{#each item.notes as note (note.id)}
@@ -143,7 +154,7 @@
 				</form>
 			</article>
 		{:else}
-			<p>No tickets to annotate yet.</p>
+			<p>No ticket history yet.</p>
 		{/each}
 	</section>
 
@@ -194,7 +205,8 @@
 	.dashboard { min-width: 0; overflow: auto; padding: 14px 23px 22px; }
 	.work-item { padding: 16px 0; border-top: 1px solid var(--ui-border); overflow-wrap: anywhere; }
 	.work-item h3 { margin: 0; color: var(--ui-text); font-size: 16px; }
-	.work-item ul { padding-left: 24px; }
+	.work-item h4 { margin: 12px 0 8px; font-size: 14px; }
+	.work-item ul, .work-item ol { padding-left: 24px; }
 	.work-feedback { color: var(--ui-text); }
 	.note-list li { margin-bottom: 12px; font-size: 14px; }
 	.note-list time { color: var(--ui-muted); }

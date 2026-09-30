@@ -51,7 +51,7 @@ Verification: `bun test slack.test.js` plus focused migration test, fresh app-lo
 
 ### Phase 3 — `feat(slack): show official replies in staff ticket history`
 
-Scope/files: `apps/web/src/lib/server/tickets.ts`, `apps/web/src/routes/slack/+page.svelte`, `slack.test.js`, `README.md`, `DESIGN.md` if a history contract addition is needed.
+Scope/files: `apps/web/src/lib/server/tickets.ts`, `apps/web/src/routes/slack/+page.svelte`, `slack.test.js`, `README.md`, `DESIGN.md` if a history contract addition is needed, and this plan's final evidence.
 
 Read saved official author IDs independently of current assignment and expose ordered Slack reply history on shared staff ticket cards. Render official label, stored Slack sender, staff author, source time and body separately from internal notes and generic thread messages. Reuse existing styles and semantic elements. Verify another staff member sees history after reload/restart, reassignment/binding changes do not rewrite old authors, and internal notes never reach mocked Slack or the signed-event response. Document `message.channels`/`message.groups` subscriptions and manual trusted bindings.
 
@@ -86,3 +86,17 @@ Verification: targeted signed-event/staff-view HTTP tests, fresh `bun test`, `bu
 - Record actual command results and any residual blockers. No push or GitHub issue closure is part of this request.
 
 Planning is complete. Execution is authorized by the goal objective, including phase commits.
+
+## Observed verification
+
+- Phase 1: real HTTP binding and permission tests pass with 192 assertions; fresh typecheck and scoped lint/format pass.
+- Phase 2: signed Slack behavior tests pass with 208 assertions. Two migration cases pass with 38 assertions, including concurrent cold starts, both legacy schema forms, preserved notes/outbound replies, and idempotent startup.
+- Phase 3: rendered staff history tests pass with 349 assertions. Saved author, original Slack identity/time, chronological rows, deduplication, ordinary-message exclusion, private-note separation, permissions, and restart persistence are checked through the real app.
+- Full `bun test`: 11 pass, 0 fail, 594 assertions across four files.
+- Fresh `bun run check-types --force`: 0 errors; 7 pre-existing warnings in settings/general and SOP.
+- Fresh `bun run build --force`: passes with no cached task. Deployment adapter configuration remains an existing deployment concern, outside this local implementation.
+- Full tracked JS/TS lint with the repository's `oxlint.config.ts`: exit 0. Mandatory `npx -y oxlint@latest` and scoped Ultracite checks pass on changed source/tests.
+- Full `bun run check`: exits 1 because 19 untouched files have pre-existing formatting issues. All 18 tracked failures are byte-identical to base `b31a06f`; the remaining file is the pre-existing untracked `docs/superpowers/plans/2026-09-28-better-auth-cutover.md`. No unrelated formatting fixes are included.
+- Final phase reviews inspect the verified diff before each commit. Final branch review checks documented standards and Issue #7 separately, followed by ponytail review.
+
+The only repository-wide check limitation is the existing formatting baseline. Feature acceptance is verified; cleanup of unrelated files requires a separate scope.
