@@ -30,7 +30,8 @@ const moderation = async (
   const rawTitle = form.get("title");
   const rawBody = form.get("body");
   const attempted = {
-    body: typeof rawBody === "string" ? rawBody : "",
+    body:
+      typeof rawBody === "string" ? rawBody.replaceAll(/\r\n?/gu, "\n") : "",
     id: typeof rawId === "string" ? rawId : "",
     revision: typeof rawRevision === "string" ? rawRevision : "",
     title: typeof rawTitle === "string" ? rawTitle : "",
@@ -50,6 +51,17 @@ const moderation = async (
   }
   let result;
   try {
+    const saved = getSop(sopId);
+    if (
+      saved?.revision === revision &&
+      (attempted.title !== saved.title || attempted.body !== saved.body)
+    ) {
+      return fail(409, {
+        ...attempted,
+        message:
+          "Save Draft before approval or withdrawal. Your edits are not saved yet.",
+      });
+    }
     result = operation({ actorId, revision, sopId });
   } catch {
     return fail(500, {
@@ -105,7 +117,8 @@ export const actions: Actions = {
     const rawTitle = form.get("title");
     const rawBody = form.get("body");
     const attempted = {
-      body: typeof rawBody === "string" ? rawBody : "",
+      body:
+        typeof rawBody === "string" ? rawBody.replaceAll(/\r\n?/gu, "\n") : "",
       id: typeof rawId === "string" ? rawId : "",
       revision: typeof rawRevision === "string" ? rawRevision : "",
       title: typeof rawTitle === "string" ? rawTitle : "",

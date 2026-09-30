@@ -77,4 +77,20 @@ Inspect final status/diff/history against phase boundaries, excluding protected 
 
 Phase 2 adjustment: split schema and lifecycle into `sop-schema.ts` and `sop-lifecycle.ts` so storage remains focused and under 250 nonblank lines. Split HTTP lifecycle tests into `sop-lifecycle.test.js`. Schema initialization uses an immediate transaction to serialize concurrent cold starts; these files remain in the same logical lifecycle commit.
 
+Phase 3 adjustments from browser QA: use adjacent `sop-editor.svelte` for keyed editor state and transport-error retention. Normalize native form CRLF to LF in the server action boundary with regression coverage, so failed moderation does not falsely report unsaved edits. The shared header's fixed 300px search minimum caused 41px overflow at 768px; use a shrinkable grid track and wrap staff identity to keep the real SOP workspace within its viewport. These are prerequisites for the requested error and responsive UI behavior, not unrelated redesign.
+
 Planning complete. User explicitly authorized planning through implementation, verification and phase commits.
+
+## Observed delivery evidence
+
+- Phase 1: `95340c0`, real HTTP persistence/restart test passes with 29 assertions. Independent review caught and resolved revocation during request-body reading with atomic SQL role predicates.
+- Phase 2: `3451e97`, admin-only audited transitions, snapshot immutability, superseded/withdrawn eligibility rejection and historical answer joins verified. Two simultaneous Node drivers initialize SOP schema safely; audit/update/withdrawal aborts roll back without losing drafts. Driver assertions include revoked storage actors and retained source content after restart.
+- Phase 3: working `/sop` replaces sample workflow. Browser drives admin create/edit/reload/approve/reapprove/withdraw, independent agent read/edit/reload and direct moderation denial (403). Real SQLite audit aborts and blocked network requests preserve drafts and never report success.
+- Native JavaScript-disabled approval/withdrawal retains multiline fields after database failure. Server also rejects moderation of unsaved submitted edits with 409, preserving them; HTTP regressions cover both actions. Duplicate-approval regression submits matching saved content so it reaches the lifecycle guard.
+- Fresh full `bun test`: 14 pass, 0 fail, 678 assertions across 7 files. Latest test-fixture adjustment also passes targeted lifecycle test (34 assertions).
+- Fresh `bun run check-types --force`: 0 errors, only the existing settings/general autofocus warning. Fresh `bun run build --force`: exit 0; existing adapter-auto deployment configuration warning remains outside this issue.
+- Mandatory Oxlint and scoped Ultracite checks pass for all changed code, tests and docs. Repository-wide format check retains 26 pre-existing failures in untouched files, down from baseline 28 because the two edited docs now pass. No unrelated formatting cleanup is included.
+- LSP diagnostics cannot run because the configured servers are unavailable and installation was previously declined. Fresh Svelte/TypeScript compiler and CLI lint provide validation instead.
+- Independent code/ponytail review: all actionable findings resolved; final phase review says “Lean already; 0 lines removable. Ship.” Independent fresh visual review opened all 36 captures at 375/768/1280 and returned PASS, including Thai/long-token content, errors, snapshots and staff controls.
+
+No AI engine, automatic delivery, new dependencies, push, PR or issue closure added. Pre-existing `docs/superpowers/` remains protected.

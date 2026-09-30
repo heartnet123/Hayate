@@ -40,6 +40,13 @@ Existing dashboard panels use 12px gaps, 16px ticket-row padding, 8px form gaps.
 
 ## 6. Motion & Interaction
 
+### SOP review workspace
+
+- **Structure:** saved SOP list beside draft editor; semantic status metadata, immutable approved snapshot and chronological actor/time lifecycle history. Replace sample tickets, fake confidence and preview publishing with persisted facts.
+- **States:** empty/new draft, saved draft, approved active version, saved edits awaiting approval, withdrawn, pending submit, validation/conflict/database/transport failure. Approved content stays distinct from editable draft content.
+- **Controls:** staff save drafts; admin approve saved content or withdraw active version. Save edits before moderating; no optimistic lifecycle success. Every input labelled, visible focus, status expressed in text, errors announced with `role="alert"` and submitted fields retained.
+- **Layout:** reuse `.ui-panel`, `.ui-button`, `.ui-field`, `.ui-badge`; 8/12/16px gaps/padding, 14–16px readable body and 12px metadata. Main content owns scrolling; list/editor stack on narrow viewports, long content wraps. Existing status colors only, no new motion or dependencies.
+
 No animation needed for append-only notes. Native submit and server feedback reflect actual saved state; no optimistic display before persistence. Respect existing focus styles and reduced-motion behavior.
 
 ## 7. Depth & Surface

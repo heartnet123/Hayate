@@ -122,8 +122,8 @@ test("HTTP SOP lifecycle enforces admin moderation and retains immutable history
   const fields = moderationFields(
     id,
     "1",
-    "Unsaved editor title",
-    "Unsaved editor body"
+    "Power reset v1",
+    "Approved snapshot body one"
   );
 
   const denied = await Promise.all([
@@ -165,7 +165,7 @@ test("HTTP SOP lifecycle enforces admin moderation and retains immutable history
 
   const duplicate = await post(
     "/sop?/approve",
-    moderationFields(id, "2", "Duplicate title", "Duplicate body"),
+    moderationFields(id, "2", "Power reset v1", "Approved snapshot body one"),
     adminCookie
   );
   expect(duplicate.status).toBe(409);
@@ -173,7 +173,7 @@ test("HTTP SOP lifecycle enforces admin moderation and retains immutable history
   const edited = await post(
     "/sop?/save",
     {
-      body: "Saved draft body two",
+      body: "Saved draft body two\r\nSecond line",
       id,
       revision: "2",
       title: "Power reset v2",
@@ -187,6 +187,28 @@ test("HTTP SOP lifecycle enforces admin moderation and retains immutable history
   expect(loadedHtml).toContain("Saved draft body two");
   expect(loadedHtml).toContain("Approved snapshot body one");
   expect(loadedHtml).toContain(approvalEvent.createdAt);
+  const unsavedRequests = await Promise.all(
+    ["approve", "withdraw"].map(async (action) => {
+      const response = await post(
+        `/sop?id=${id}&/${action}`,
+        moderationFields(
+          id,
+          "3",
+          "Unsaved editor title",
+          "Unsaved editor body"
+        ),
+        adminCookie
+      );
+      return { body: await response.text(), status: response.status };
+    })
+  );
+  for (const unsaved of unsavedRequests) {
+    expect(unsaved.status).toBe(409);
+    expect(unsaved.body).toContain("Unsaved editor body");
+  }
+  expect(
+    db.prepare("SELECT COUNT(*) AS count FROM sop_events").get().count
+  ).toBe(1);
 
   db.exec(`
     CREATE TRIGGER fail_sop_audit BEFORE INSERT ON sop_events
@@ -197,21 +219,47 @@ test("HTTP SOP lifecycle enforces admin moderation and retains immutable history
     moderationFields(
       id,
       "3",
-      "Preserved editor title",
-      "Preserved editor body"
+      "Power reset v2",
+      "Saved draft body two\r\nSecond line"
     ),
     adminCookie
   );
   expect(failed.status).toBe(500);
   const failedHtml = await failed.text();
-  expect(failedHtml).toContain("Preserved editor title");
-  expect(failedHtml).toContain("Preserved editor body");
+  expect(failedHtml).toContain("Power reset v2");
+  expect(failedHtml).toContain("Saved draft body two\nSecond line");
   expect(failedHtml).not.toContain("private lifecycle detail");
+  const failedWithdrawal = await post(
+    `/sop?id=${id}&/withdraw`,
+    moderationFields(
+      id,
+      "3",
+      "Power reset v2",
+      "Saved draft body two\r\nSecond line"
+    ),
+    adminCookie
+  );
+  expect(failedWithdrawal.status).toBe(500);
+  expect(await failedWithdrawal.text()).toContain(
+    "Saved draft body two\nSecond line"
+  );
+  expect(
+    db.prepare("SELECT body, status, revision FROM sops WHERE id = ?").get(id)
+  ).toEqual({
+    body: "Saved draft body two\nSecond line",
+    revision: 3,
+    status: "active",
+  });
   db.exec("DROP TRIGGER fail_sop_audit");
 
   const secondApproval = await post(
     "/sop?/approve",
-    moderationFields(id, "3", "Editor", "Editor"),
+    moderationFields(
+      id,
+      "3",
+      "Power reset v2",
+      "Saved draft body two\nSecond line"
+    ),
     adminCookie
   );
   expect(secondApproval.status).toBe(303);
@@ -230,7 +278,12 @@ test("HTTP SOP lifecycle enforces admin moderation and retains immutable history
   expect(staleWithdrawal.status).toBe(409);
   const withdrawal = await post(
     "/sop?/withdraw",
-    moderationFields(id, "4", "Editor", "Editor"),
+    moderationFields(
+      id,
+      "4",
+      "Power reset v2",
+      "Saved draft body two\nSecond line"
+    ),
     adminCookie
   );
   expect(withdrawal.status).toBe(303);

@@ -2,9 +2,9 @@
 
 # HelpDesk AI
 
-An interactive help desk interface prototype built with SvelteKit. Administrators manage staff access; support metrics, Slack intake, SOP drafting, and other configuration screens use sample data.
+An interactive help desk interface built with SvelteKit. Staff manage real Slack tickets and SOP drafts; administrators control access and approve or withdraw SOP guidance. Dashboard metrics and other configuration previews use sample data.
 
-> [!IMPORTANT] This remains a UI demo except for sign-in, Roles & Permissions, Slack workspace/channel configuration, signed Slack request intake, ticket claiming, internal ticket notes, and official replies. Metrics, sample messages, SOP drafts, and other settings are examples.
+> [!IMPORTANT] Sign-in, Roles & Permissions, Slack configuration/intake, ticket claiming, notes, official replies and SOP review are persisted. Metrics, sample Slack conversations and other settings remain examples. No AI answer generator is implemented yet.
 
 ## Explore the demo
 
@@ -12,7 +12,7 @@ An interactive help desk interface prototype built with SvelteKit. Administrator
 | --- | --- |
 | `/` | Dashboard with ticket trends, categories, CSAT, AI insight examples, and recent tickets. |
 | `/slack` | Unassigned central queue from signed `/slack/events` requests, claim actions, your assigned tickets and app replies, and shared ticket history with official replies from Slack and internal notes. Sample conversations and triage below remain previews. |
-| `/sop` | A sample ticket and editable SOP title and sections, with reviewer and publish controls. |
+| `/sop` | Private persisted drafts, administrator approval/withdrawal, immutable approved versions and decision history. |
 | `/settings` | Admin-only: manage support agents and link staff Slack identities in Roles & Permissions; configure the Slack workspace and support channel in Slack Integration. Other tabs remain previews. |
 
 The sidebar also shows planned areas such as Tickets, KB Chatbot, Knowledge Base, and Analytics. Those entries do not have pages yet.
@@ -29,7 +29,7 @@ bun run dev
 
 Open [http://localhost:5173](http://localhost:5173). To run only the web workspace, use `bun run dev:web`.
 
-First startup requires `HELPDESK_ADMIN_EMAIL` and `HELPDESK_ADMIN_PASSWORD` (12–128 characters) in the server environment. Administrator account is created only when database has no admin; use credentials to sign in at `/login`. Administrator creates support agents under `/settings/roles` with temporary passwords, then agents sign in to see dashboard, Slack, and SOP previews. Agents cannot open settings. Roles and sessions persist in SQLite at `apps/web/local.db` by default; set `HELPDESK_DB_PATH` to a writable persistent path in production. Protect database files and environment variables; do not store credentials in browser-side config or commit them. Use a persistent Node.js deployment with writable disk, not ephemeral serverless storage. `node:sqlite` requires Node.js 22.13+ (Node.js 24 recommended).
+First startup requires `HELPDESK_ADMIN_EMAIL` and `HELPDESK_ADMIN_PASSWORD` (12–128 characters) in the server environment. Administrator account is created only when database has no admin; use credentials to sign in at `/login`. Administrator creates support agents under `/settings/roles` with temporary passwords, then agents sign in to see dashboard, Slack, and SOP review. Agents cannot open settings. Roles and sessions persist in SQLite at `apps/web/local.db` by default; set `HELPDESK_DB_PATH` to a writable persistent path in production. Protect database files and environment variables; do not store credentials in browser-side config or commit them. Use a persistent Node.js deployment with writable disk, not ephemeral serverless storage. `node:sqlite` requires Node.js 22.13+ (Node.js 24 recommended).
 
 For Slack Events API intake, set `SLACK_SIGNING_SECRET` on the server and configure the **team ID** (`T...`) as workspace and the **channel ID** (`C...` or `G...`) as support channel under `/settings/slack`. Slack delivers these IDs, not workspace and channel names; previously saved names must be replaced with IDs before real `app_mention` events can be routed. Add the installed Slack app to the source support channel and subscribe to `app_mention`, plus [`message.channels`](https://docs.slack.dev/reference/events/message.channels/) with `channels:history` for a public channel or [`message.groups`](https://docs.slack.dev/reference/events/message.groups/) with `groups:history` for a private channel. Neither signing secret nor bot token belongs in the settings form.
 
@@ -40,6 +40,12 @@ To send official replies from the app, set `SLACK_BOT_TOKEN` on the server to a 
 In Slack, each new message sent after assignment by the active, linked current assignee in the ticket's original thread becomes an official reply. Multiple replies appear in the shared Support ticket history with the saved staff email, original Slack member/name, UTC source time, and body. New messages from unlinked or revoked accounts, other staff, the requester, and participants are not official replies. Slack retries do not duplicate history; reassignment and identity changes do not rewrite earlier authors or reclassify existing messages.
 
 Active support agents and admins can read and add internal notes on any ticket in the shared Support ticket history section of `/slack`. Notes include author and time, persist in the SQLite database, and never go to Slack or change the official reply. Only signed-in staff can access this section, including direct server requests; Slack requesters have no staff access.
+
+## SOP review
+
+At `/sop`, active staff create and edit private title/procedure drafts. Save Draft persists edits across reloads and server restarts. Only administrators can approve saved content or withdraw an active SOP; server-side checks protect direct requests too. Unsaved edits must be saved before moderation. Approval snapshots an immutable version and records administrator and UTC time; withdrawal keeps that version and decision history but removes it from eligibility. Editing a draft does not change an already-approved version. Stale edits or failed saves display an error and preserve submitted fields rather than reporting success.
+
+The server-only `listEligibleSops()` and `recordSopAnswer(ticketId, versionId, answerBody)` in `apps/web/src/lib/server/sop-answers.ts` provide an AI integration boundary, not an AI generator or delivery path. The query returns only current approved versions; recording rechecks eligibility atomically and persists the exact source version with the answer. Future callers must expose an answer only after recording succeeds. Superseded or withdrawn versions cannot be recorded for new answers; earlier answers retain immutable source content. No public draft endpoint, heuristic matching, embeddings or automatic Slack answers are added.
 
 ## Project layout
 
