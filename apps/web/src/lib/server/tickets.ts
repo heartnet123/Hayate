@@ -61,6 +61,14 @@ export const listAssignedTickets = (agentId: number) => {
 
 export const listSupportTickets = () => {
   const db = getDatabase();
+  const officialReplies = db.prepare(`
+    SELECT slack_messages.id, slack_messages.body, slack_messages.message_ts AS messageTs,
+      slack_messages.user_id AS slackUserId, slack_messages.user_name AS slackUserName,
+      users.email AS author
+    FROM slack_messages JOIN tickets ON tickets.request_id = slack_messages.request_id
+    JOIN users ON users.id = slack_messages.official_agent_id
+    WHERE tickets.id = ? ORDER BY CAST(slack_messages.message_ts AS REAL), slack_messages.id
+  `);
   const notes = db.prepare(`
     SELECT internal_notes.id, internal_notes.body, internal_notes.created_at AS createdAt,
       users.email AS author
@@ -81,6 +89,14 @@ export const listSupportTickets = () => {
         body: String(note.body),
         createdAt: String(note.createdAt),
         id: Number(note.id),
+      })),
+      officialReplies: officialReplies.all(Number(ticket.id)).map((reply) => ({
+        author: String(reply.author),
+        body: String(reply.body),
+        createdAt: new Date(Number(reply.messageTs) * 1000).toISOString(),
+        id: Number(reply.id),
+        slackUserId: String(reply.slackUserId),
+        slackUserName: String(reply.slackUserName),
       })),
       ownerName: String(ticket.ownerName),
       reason: String(ticket.reason),

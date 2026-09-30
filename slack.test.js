@@ -6,6 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 
+const officialReplyEntryPattern = /<li(?:\s[^>]*)?>(?<entry>[\s\S]*?)<\/li>/gu;
 const directory = mkdtempSync(path.join(tmpdir(), "helpdesk-replies-"));
 const dbPath = path.join(directory, "tickets.db");
 const secret = "slack-signing-secret-canary";
@@ -86,7 +87,12 @@ const login = async (email, pass) => {
   const response = await post("/login", { email, password: pass });
   return response.headers.get("set-cookie")?.split(";")[0] ?? "";
 };
-const intake = (threadTs = "1710000001.000100", eventId = "Ev-claim") => {
+const intake = (
+  threadTs = "1710000001.000100",
+  eventId = "Ev-claim",
+  eventOverrides = {},
+  { workspace = "T123ABC456", signingSecret = secret } = {}
+) => {
   const body = JSON.stringify({
     event: {
       channel: "C123ABC456",
@@ -95,9 +101,10 @@ const intake = (threadTs = "1710000001.000100", eventId = "Ev-claim") => {
       type: "app_mention",
       user: "U123",
       user_name: "Requester",
+      ...eventOverrides,
     },
     event_id: eventId,
-    team_id: "T123ABC456",
+    team_id: workspace,
     type: "event_callback",
   });
   const stamp = String(Math.floor(Date.now() / 1000));
@@ -106,7 +113,7 @@ const intake = (threadTs = "1710000001.000100", eventId = "Ev-claim") => {
     headers: {
       "content-type": "application/json",
       "x-slack-request-timestamp": stamp,
-      "x-slack-signature": `v0=${createHmac("sha256", secret).update(`v0:${stamp}:${body}`).digest("hex")}`,
+      "x-slack-signature": `v0=${createHmac("sha256", signingSecret).update(`v0:${stamp}:${body}`).digest("hex")}`,
     },
     method: "POST",
   });
@@ -484,4 +491,435 @@ test("two agents race to claim one queued thread", async () => {
       })
     )
   ).toBe(401);
+}, 30_000);
+
+test("signed Slack assignee replies preserve history, identity, dedupe, and privacy", async () => {
+  const admin = await login("admin@example.com", password);
+  const db = new DatabaseSync(dbPath);
+  try {
+    const agentA = db
+      .prepare("SELECT id, role FROM users WHERE email = ?")
+      .get("a@example.com");
+    if (agentA.role === "revoked") {
+      expect(
+        await status(
+          post(
+            "/settings/roles?/change",
+            { email: "a@example.com", role: "agent" },
+            admin
+          )
+        )
+      ).toBe(200);
+    }
+    expect(
+      await status(
+        post(
+          "/settings/roles?/create",
+          { email: "c@example.com", password },
+          admin
+        )
+      )
+    ).toBe(200);
+    const a = await login("a@example.com", password);
+    const c = await login("c@example.com", password);
+    const agentC = db
+      .prepare("SELECT id FROM users WHERE email = ?")
+      .get("c@example.com");
+    expect(
+      await Promise.all(
+        [
+          [agentA.id, "U111AAA111"],
+          [agentC.id, "U222BBB222"],
+        ].map(([userId, slackUserId]) =>
+          status(
+            post(
+              "/settings/roles?/identity",
+              { slackUserId, userId: String(userId), workspace: "T123ABC456" },
+              admin
+            )
+          )
+        )
+      )
+    ).toEqual([200, 200]);
+    const threadTs = (Date.now() / 1000 - 1).toFixed(6);
+    expect(await status(intake(threadTs, "Ev-history-root"))).toBe(200);
+    const ticketQuery = db.prepare(
+      "SELECT tickets.id, request_id FROM tickets JOIN slack_requests ON slack_requests.id = tickets.request_id WHERE thread_ts = ?"
+    );
+    const ticket = ticketQuery.get(threadTs);
+    expect(
+      await status(post("/slack?/claim", { ticketId: String(ticket.id) }, a))
+    ).toBe(200);
+    const assignedAt = db
+      .prepare("SELECT assigned_at FROM tickets WHERE id = ?")
+      .get(ticket.id).assigned_at;
+    expect(assignedAt).toBeGreaterThan(0);
+    const privateNote = "Private assignee history context canary";
+    expect(
+      await status(
+        post(
+          "/slack?/note",
+          { body: privateNote, ticketId: String(ticket.id) },
+          a
+        )
+      )
+    ).toBe(200);
+    const sentBefore = sent.length;
+    let eventClock = Date.now() / 1000;
+    const deliver = async (eventId, eventOverrides = {}, options = {}) => {
+      eventClock = Math.max(eventClock + 0.000001, Date.now() / 1000);
+      const response = await intake(
+        threadTs,
+        eventId,
+        {
+          text: "Assigned agent answer",
+          thread_ts: threadTs,
+          ts: eventClock.toFixed(6),
+          type: "message",
+          user: "U111AAA111",
+          user_name: "Agent A",
+          ...eventOverrides,
+        },
+        options
+      );
+      expect(response.status).toBe(200);
+      const responseBody = await response.text();
+      expect(responseBody).not.toContain(privateNote);
+      return JSON.parse(responseBody);
+    };
+    const history = () =>
+      db
+        .prepare(
+          "SELECT official_agent_id AS authorId, users.email AS author, body, message_ts AS timestamp, user_id AS slackUserId, user_name AS slackUserName FROM slack_messages JOIN users ON users.id = slack_messages.official_agent_id WHERE request_id = ? ORDER BY slack_messages.id"
+        )
+        .all(ticket.request_id);
+    const messageCount = () =>
+      db.prepare("SELECT count(*) AS total FROM slack_messages").get().total;
+    const officialList = (html, replies) => {
+      const list = html
+        .split(
+          `aria-label="Official Slack replies for ticket #${ticket.id}"`
+        )[1]
+        ?.split("</ol>")[0];
+      expect(list).toBeDefined();
+      expect(list).not.toContain(privateNote);
+      const entries = Array.from(
+        list.matchAll(officialReplyEntryPattern),
+        (match) => match.groups.entry
+      );
+      expect(entries).toHaveLength(replies.length);
+      for (const [index, reply] of replies
+        .toSorted(
+          (left, right) => Number(left.timestamp) - Number(right.timestamp)
+        )
+        .entries()) {
+        const entry = entries[index];
+        const createdAt = new Date(
+          Number(reply.timestamp) * 1000
+        ).toISOString();
+        expect(entry).toContain(`${reply.author}</strong>`);
+        expect(entry).toContain(
+          `${reply.slackUserName} (${reply.slackUserId})`
+        );
+        expect(entry).toContain(`datetime="${createdAt}"`);
+        expect(entry).toContain(
+          createdAt.replace("T", " ").replace("Z", " UTC")
+        );
+        expect(entry).toContain(reply.body.replace("<@U123> ", ""));
+      }
+      return list;
+    };
+    const firstTs = assignedAt.toFixed(6);
+    await deliver("Ev-history-first", { ts: firstTs });
+    await deliver("Ev-history-mention", {
+      text: "<@U123> Assignee mention answer",
+      type: "app_mention",
+    });
+    await Promise.all(
+      ["thread_broadcast", "file_share", "me_message"].map((subtype) =>
+        deliver(`Ev-history-${subtype}`, {
+          subtype,
+          text: `Human ${subtype} answer`,
+        })
+      )
+    );
+    const originalHistory = history();
+    expect(originalHistory).toHaveLength(5);
+    expect(
+      originalHistory.every(
+        (reply) =>
+          reply.authorId === agentA.id && reply.author === "a@example.com"
+      )
+    ).toBe(true);
+    const rendered = await page(a);
+    for (const reply of originalHistory) {
+      expect(rendered).toContain(reply.body.replace("<@U123> ", ""));
+      expect(rendered).toContain(reply.timestamp);
+    }
+    const beforeDuplicates = messageCount();
+    await deliver("Ev-history-first", { ts: firstTs });
+    await deliver("Ev-history-same-timestamp", { ts: firstTs });
+    await deliver("Ev-history-first", {
+      text: "Changed retry payload",
+      ts: (Date.now() / 1000 + 1).toFixed(6),
+    });
+    expect(messageCount()).toBe(beforeDuplicates);
+    expect(history()).toEqual(originalHistory);
+
+    await Promise.all(
+      [
+        ["Ev-history-requester", { text: "Requester follow-up", user: "U123" }],
+        [
+          "Ev-history-other-staff",
+          {
+            text: "Other staff follow-up",
+            user: "U222BBB222",
+          },
+        ],
+        [
+          "Ev-history-unlinked",
+          { text: "Unlinked user follow-up", user: "U333CCC333" },
+        ],
+        [
+          "Ev-history-name-spoof",
+          {
+            text: "Display-name spoof follow-up",
+            user: "U444DDD444",
+            user_name: "a@example.com",
+          },
+        ],
+        [
+          "Ev-history-delayed-preclaim",
+          {
+            text: "Delayed preclaim message",
+            ts: (assignedAt - 0.001).toFixed(6),
+          },
+        ],
+      ].map(async ([eventId, eventOverrides]) => {
+        await deliver(eventId, eventOverrides);
+        expect({
+          attribution: db
+            .prepare(
+              "SELECT official_agent_id FROM slack_messages WHERE event_id = ?"
+            )
+            .get(eventId),
+          eventId,
+        }).toEqual({ attribution: { official_agent_id: null }, eventId });
+      })
+    );
+    const otherStaffTs = db
+      .prepare(
+        "SELECT message_ts FROM slack_messages WHERE event_id = 'Ev-history-other-staff'"
+      )
+      .get().message_ts;
+    expect(history()).toEqual(originalHistory);
+    const sharedHistory = await page(c);
+    expect(sharedHistory).toContain('aria-label="Support ticket history"');
+    expect(sharedHistory).toContain("Official replies from Slack</h4>");
+    expect(sharedHistory).toContain("Internal notes</h4>");
+    const initialList = officialList(sharedHistory, originalHistory);
+    expect(initialList.split("Assigned agent answer")).toHaveLength(2);
+    for (const body of [
+      "Requester follow-up",
+      "Other staff follow-up",
+      "Unlinked user follow-up",
+      "Display-name spoof follow-up",
+      "Delayed preclaim message",
+    ]) {
+      expect(initialList).not.toContain(body);
+    }
+    const internalNotes = sharedHistory
+      .split(`id="ticket-${ticket.id}"`)[1]
+      ?.split("Internal notes</h4>")[1]
+      ?.split("</ul>")[0];
+    expect(internalNotes).toContain(privateNote);
+    expect(internalNotes).not.toContain("Assigned agent answer");
+    const beforeIgnored = messageCount();
+    await Promise.all(
+      [
+        [
+          "Ev-history-bot-spoof",
+          { bot_id: "B123ABC456", text: "Bot spoof answer" },
+        ],
+        [
+          "Ev-history-edited",
+          { subtype: "message_changed", text: "Edited answer" },
+        ],
+        [
+          "Ev-history-deleted",
+          { subtype: "message_deleted", text: "Deleted answer" },
+        ],
+        ["Ev-history-wrong-workspace", {}, { workspace: "T999AAA999" }],
+        ["Ev-history-wrong-channel", { channel: "C999AAA999" }],
+        ["Ev-history-numeric-timestamp", { ts: Number(firstTs) }],
+        ["Ev-history-numeric-thread", { thread_ts: Number(threadTs) }],
+        ["Ev-history-numeric-text", { text: 123 }],
+        ...[
+          "not-a-timestamp",
+          "1700000000",
+          "1700000000.1234567",
+          "999999999999999999999.0",
+        ].map((ts, index) => [`Ev-history-invalid-ts-${index}`, { ts }]),
+      ].map(async ([eventId, eventOverrides, options]) => {
+        expect(await deliver(eventId, eventOverrides, options)).toEqual({
+          accepted: false,
+        });
+      })
+    );
+    expect(messageCount()).toBe(beforeIgnored);
+    const badSignature = await intake(
+      threadTs,
+      "Ev-history-invalid-signature",
+      {
+        thread_ts: threadTs,
+        ts: (Date.now() / 1000).toFixed(6),
+        type: "message",
+        user: "U111AAA111",
+      },
+      { signingSecret: "wrong-signing-secret" }
+    );
+    expect(badSignature.status).toBe(401);
+    expect(await badSignature.text()).not.toContain(privateNote);
+    expect(messageCount()).toBe(beforeIgnored);
+
+    expect(
+      await status(
+        post(
+          "/settings/roles?/identity",
+          {
+            slackUserId: "U555EEE555",
+            userId: String(agentA.id),
+            workspace: "T123ABC456",
+          },
+          admin
+        )
+      )
+    ).toBe(200);
+    await deliver("Ev-history-old-binding", { text: "Old binding answer" });
+    expect(history()).toEqual(originalHistory);
+    expect(
+      await status(
+        post(
+          "/settings/roles?/change",
+          { email: "a@example.com", role: "revoked" },
+          admin
+        )
+      )
+    ).toBe(200);
+    await deliver("Ev-history-revoked-agent", {
+      text: "Revoked agent answer",
+      user: "U555EEE555",
+    });
+    expect(history()).toEqual(originalHistory);
+    const unchangedList = officialList(await page(c), originalHistory);
+    expect(unchangedList).not.toContain("U555EEE555");
+    await Promise.all(
+      ["", a].map(async (cookie) => {
+        const response = await fetch(`${address}/slack/__data.json`, {
+          headers: { cookie },
+        });
+        expect(response.status).toBe(401);
+        const body = await response.text();
+        expect(body).not.toContain("Assigned agent answer");
+        expect(body).not.toContain(privateNote);
+      })
+    );
+
+    db.prepare("UPDATE tickets SET assignee_id = ? WHERE id = ?").run(
+      agentC.id,
+      ticket.id
+    );
+    const reassignedAt = db
+      .prepare("SELECT assigned_at FROM tickets WHERE id = ?")
+      .get(ticket.id).assigned_at;
+    expect(reassignedAt).toBeGreaterThan(assignedAt);
+    await deliver("Ev-history-other-staff", {
+      text: "Other staff follow-up",
+      ts: otherStaffTs,
+      user: "U222BBB222",
+    });
+    await deliver("Ev-history-delayed-prehandoff", {
+      text: "Delayed prehandoff answer",
+      ts: (reassignedAt - 0.001).toFixed(6),
+      user: "U222BBB222",
+    });
+    await deliver("Ev-history-former-assignee", {
+      text: "Former assignee answer",
+      user: "U555EEE555",
+    });
+    expect(history()).toEqual(originalHistory);
+    await deliver("Ev-history-new-assignee", {
+      text: "New assignee answer",
+      user: "U222BBB222",
+      user_name: "Agent C",
+    });
+    const durableHistory = history();
+    expect(durableHistory).toHaveLength(6);
+    expect(durableHistory.slice(0, 5)).toEqual(originalHistory);
+    expect(durableHistory[5]).toMatchObject({
+      author: "c@example.com",
+      authorId: agentC.id,
+      body: "New assignee answer",
+    });
+
+    const requesterThreadTs = (Date.now() / 1000).toFixed(6);
+    expect(
+      await status(
+        intake(requesterThreadTs, "Ev-history-bound-requester-root", {
+          text: "<@U123> Bound requester asks",
+          user: "U222BBB222",
+          user_name: "Agent C",
+        })
+      )
+    ).toBe(200);
+    const requesterTicket = ticketQuery.get(requesterThreadTs);
+    expect(
+      await status(
+        post("/slack?/claim", { ticketId: String(requesterTicket.id) }, c)
+      )
+    ).toBe(200);
+    await deliver("Ev-history-bound-requester-answer", {
+      text: "Requester mapped to current assignee",
+      thread_ts: requesterThreadTs,
+      user: "U222BBB222",
+    });
+    expect(
+      db
+        .prepare(
+          "SELECT official_agent_id FROM slack_messages WHERE event_id = 'Ev-history-bound-requester-answer'"
+        )
+        .get()
+    ).toEqual({ official_agent_id: null });
+    expect(history()).toEqual(durableHistory);
+    expect(
+      db
+        .prepare(
+          "SELECT count(*) AS total FROM official_replies WHERE ticket_id = ?"
+        )
+        .get(ticket.id).total
+    ).toBe(0);
+    expect(sent).toHaveLength(sentBefore);
+
+    const beforeRestartList = officialList(await page(c), durableHistory);
+    expect(beforeRestartList).not.toContain("U555EEE555");
+    server.kill();
+    await server.exited;
+    server = await startServer();
+    const recovered = await page(c);
+    expect(history()).toEqual(durableHistory);
+    expect(officialList(recovered, durableHistory)).toBe(beforeRestartList);
+    for (const reply of durableHistory) {
+      expect(recovered).toContain(reply.body.replace("<@U123> ", ""));
+      expect(recovered).toContain(reply.timestamp);
+    }
+    expect(recovered).toContain(privateNote);
+    expect(
+      db
+        .prepare("SELECT body FROM internal_notes WHERE ticket_id = ?")
+        .get(ticket.id)
+    ).toEqual({ body: privateNote });
+    expect(sent).toHaveLength(sentBefore);
+  } finally {
+    db.close();
+  }
 }, 30_000);

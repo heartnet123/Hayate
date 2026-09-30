@@ -223,6 +223,70 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   expect(roles).not.toContain("password_hash");
   expect(roles).not.toContain("helpdesk_session=");
 
+  const usersDb = new DatabaseSync(databasePath);
+  const adminUserId = usersDb
+    .prepare("SELECT id FROM users WHERE email = ?")
+    .get("admin@example.com").id;
+  const agentUserId = usersDb
+    .prepare("SELECT id FROM users WHERE email = ?")
+    .get("agent@example.com").id;
+  usersDb.close();
+  const revokedUser = await post(
+    "/settings/roles?/create",
+    { email: "revoked@example.com", password: "temporary-password-2026" },
+    admin.cookie
+  );
+  expect(revokedUser.status).toBe(200);
+  const revoke = await post(
+    "/settings/roles?/change",
+    { email: "revoked@example.com", role: "revoked" },
+    admin.cookie
+  );
+  expect(revoke.status).toBe(200);
+  const revokedDb = new DatabaseSync(databasePath);
+  const revokedUserId = revokedDb
+    .prepare("SELECT id FROM users WHERE email = ?")
+    .get("revoked@example.com").id;
+  revokedDb.close();
+  const revokedIdentity = await post(
+    "/settings/roles?/identity",
+    {
+      slackUserId: "U1111111111",
+      userId: String(revokedUserId),
+      workspace: "T1111111111",
+    },
+    admin.cookie
+  );
+  expect(revokedIdentity.status).toBe(400);
+  const adminIdentity = await post(
+    "/settings/roles?/identity",
+    {
+      slackUserId: "U0123456789",
+      userId: String(adminUserId),
+      workspace: "T0123456789",
+    },
+    admin.cookie
+  );
+  expect(adminIdentity.status).toBe(200);
+  expect(await adminIdentity.text()).toContain("Slack identity updated.");
+  const agentIdentity = await post(
+    "/settings/roles?/identity",
+    {
+      slackUserId: "W9876543210",
+      userId: String(agentUserId),
+      workspace: "T9876543210",
+    },
+    admin.cookie
+  );
+  expect(agentIdentity.status).toBe(200);
+  expect(await agentIdentity.text()).toContain("Slack identity updated.");
+  const guestIdentity = await post("/settings/roles?/identity", {
+    slackUserId: "U0123456789",
+    userId: String(agentUserId),
+    workspace: "T0123456789",
+  });
+  expect(guestIdentity.status).toBe(401);
+
   const agent = await login("agent@example.com", "temporary-password-2026");
   expect(agent.response.status).toBe(303);
   const agentSlack = await text(get("/slack", agent.cookie));
@@ -233,6 +297,16 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   expect(agentSlack).not.toContain("xoxb-secret-token-canary");
   expect(agentSlack).not.toContain("slack-signing-secret-canary");
   expect(await status(get("/sop", agent.cookie))).toBe(200);
+  const staffIdentity = await post(
+    "/settings/roles?/identity",
+    {
+      slackUserId: "W0123456789",
+      userId: String(agentUserId),
+      workspace: "T0123456789",
+    },
+    agent.cookie
+  );
+  expect(staffIdentity.status).toBe(403);
   expect(await status(get("/%73ettings/general", agent.cookie))).toBe(403);
   await Promise.all(
     ["/settings/roles", "/settings/general", "/settings/slack"].map(
@@ -241,6 +315,99 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
       }
     )
   );
+
+  await Promise.all(
+    [
+      {
+        slackUserId: "U0123456789",
+        userId: String(agentUserId),
+        workspace: "invalid",
+      },
+      {
+        slackUserId: "invalid",
+        userId: String(agentUserId),
+        workspace: "T1234567890",
+      },
+      {
+        slackUserId: "",
+        userId: String(agentUserId),
+        workspace: "T0123456789",
+      },
+      {
+        slackUserId: "U0123456789",
+        userId: String(agentUserId),
+        workspace: "",
+      },
+    ].map(async (fields) => {
+      const invalidIdentity = await post(
+        "/settings/roles?/identity",
+        fields,
+        admin.cookie
+      );
+      expect(invalidIdentity.status).toBe(400);
+      const body = await invalidIdentity.text();
+      expect(body).toMatch(
+        new RegExp(
+          `id="slack-workspace-${agentUserId}"[^>]*value="${fields.workspace}"`,
+          "u"
+        )
+      );
+      expect(body).toMatch(
+        new RegExp(
+          `id="slack-member-${agentUserId}"[^>]*value="${fields.slackUserId}"`,
+          "u"
+        )
+      );
+    })
+  );
+
+  const duplicateIdentity = await post(
+    "/settings/roles?/identity",
+    {
+      slackUserId: "U0123456789",
+      userId: String(agentUserId),
+      workspace: "T0123456789",
+    },
+    admin.cookie
+  );
+  expect(duplicateIdentity.status).toBe(400);
+  const duplicateBody = await duplicateIdentity.text();
+  expect(duplicateBody).toMatch(
+    new RegExp(
+      `id="slack-workspace-${agentUserId}"[^>]*value="T0123456789"`,
+      "u"
+    )
+  );
+  expect(duplicateBody).toMatch(
+    new RegExp(`id="slack-member-${agentUserId}"[^>]*value="U0123456789"`, "u")
+  );
+  let identityRoles = await text(get("/settings/roles", admin.cookie));
+  expect(identityRoles).toContain("U0123456789");
+  expect(identityRoles).toContain("W9876543210");
+  const savedIdentities = new DatabaseSync(databasePath);
+  expect(
+    savedIdentities
+      .prepare(
+        "SELECT user_id, workspace, slack_user_id FROM slack_identities ORDER BY user_id"
+      )
+      .all()
+      .map((row) => [row.user_id, row.workspace, row.slack_user_id])
+  ).toEqual([
+    [adminUserId, "T0123456789", "U0123456789"],
+    [agentUserId, "T9876543210", "W9876543210"],
+  ]);
+  savedIdentities.close();
+
+  const unboundIdentity = await post(
+    "/settings/roles?/identity",
+    { slackUserId: "", userId: String(adminUserId), workspace: "" },
+    admin.cookie
+  );
+  expect(unboundIdentity.status).toBe(200);
+  expect(await unboundIdentity.text()).toContain("Slack identity updated.");
+  identityRoles = await text(get("/settings/roles", admin.cookie));
+  expect(identityRoles).not.toContain("T0123456789");
+  expect(identityRoles).not.toContain("U0123456789");
   expect(
     await status(
       post(
@@ -576,16 +743,12 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   expect(queueHtml).toContain(
     "Escalation reason: No approved SOP matched this request."
   );
-  expect(queueHtml).toContain(
-    "Priya Desai</strong> (1710000001.000100):"
-  );
+  expect(queueHtml).toContain("Priya Desai</strong> (1710000001.000100):");
   expect(queueHtml).toContain(
     "Alex Rivera</strong> (1710000002.000100): I am seeing the same error in this thread"
   );
   expect(
-    queueHtml.split(
-      "Priya Desai</strong> (1710000001.000100):"
-    ).length - 1
+    queueHtml.split("Priya Desai</strong> (1710000001.000100):").length - 1
   ).toBe(1);
   expect(queueHtml).toContain("Owner: Daniel Kim (U303)");
   expect(queueHtml).toContain("1710000002.000200");
@@ -658,6 +821,11 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   ).toBe(200);
   const again = await login("agent@example.com", "temporary-password-2026");
   expect(again.response.status).toBe(303);
+  identityRoles = await text(get("/settings/roles", nextAdmin.cookie));
+  expect(identityRoles).toContain("T9876543210");
+  expect(identityRoles).toContain("W9876543210");
+  expect(identityRoles).not.toContain("T0123456789");
+  expect(identityRoles).not.toContain("U0123456789");
   const persistedQueue = await text(get("/slack", again.cookie));
   expect(persistedQueue).toContain("Central Queue (3 unassigned)");
   expect(persistedQueue).toContain("Owner: Priya Desai (U101)");
@@ -731,11 +899,13 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
 
   const db = new DatabaseSync(databasePath);
   expect(
-    db.prepare(`
+    db
+      .prepare(`
       SELECT COUNT(*) AS count FROM slack_messages
       JOIN slack_requests ON slack_requests.id = slack_messages.request_id
       WHERE slack_requests.thread_ts = ?
-    `).get("1710000001.000100").count
+    `)
+      .get("1710000001.000100").count
   ).toBe(4);
   db.exec(`
     CREATE TRIGGER fail_intake BEFORE INSERT ON tickets
@@ -763,6 +933,7 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   db.exec(`
     CREATE TRIGGER deny_grant BEFORE UPDATE OF role ON users BEGIN SELECT RAISE(ABORT, 'write denied'); END;
     CREATE TRIGGER deny_slack_save BEFORE UPDATE ON slack_settings BEGIN SELECT RAISE(ABORT, 'slack write denied'); END;
+    CREATE TRIGGER deny_identity_save BEFORE INSERT ON slack_identities BEGIN SELECT RAISE(ABORT, 'identity write denied'); END;
   `);
   db.close();
   const failedSlack = await post(
@@ -781,6 +952,34 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   expect(unchangedSlack).toContain("T123ABC456");
   expect(unchangedSlack).toContain("C123ABC456");
 
+  const failedIdentity = await post(
+    "/settings/roles?/identity",
+    {
+      slackUserId: "W1234567890",
+      userId: String(adminUserId),
+      workspace: "T1234567890",
+    },
+    nextAdmin.cookie
+  );
+  expect(failedIdentity.status).toBe(500);
+  const failedIdentityBody = await failedIdentity.text();
+  expect(failedIdentityBody).toMatch(
+    new RegExp(`name="userId" value="${adminUserId}"`, "u")
+  );
+  expect(failedIdentityBody).toMatch(
+    new RegExp(
+      `id="slack-workspace-${adminUserId}"[^>]*value="T1234567890"`,
+      "u"
+    )
+  );
+  expect(failedIdentityBody).toMatch(
+    new RegExp(`id="slack-member-${adminUserId}"[^>]*value="W1234567890"`, "u")
+  );
+  expect(failedIdentityBody).not.toContain("identity write denied");
+  expect(await text(get("/settings/roles", nextAdmin.cookie))).toContain(
+    "W9876543210"
+  );
+
   const failed = await post(
     "/settings/roles?/change",
     { email: "agent@example.com", role: "agent" },
@@ -796,4 +995,4 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   ).toBe(400);
   expect(await status(post("/logout", {}, nextAdmin.cookie))).toBe(303);
   expect(await status(get("/settings/roles", nextAdmin.cookie))).toBe(401);
-}, 30_000);
+}, 60_000);

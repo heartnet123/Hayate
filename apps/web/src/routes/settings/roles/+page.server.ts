@@ -2,8 +2,10 @@ import {
   changeAgentRole,
   createAgent,
   listUsers,
+  setSlackIdentity,
   validEmail,
   validPassword,
+  validSlackIdentity,
 } from "$lib/server/auth";
 import { fail, error } from "@sveltejs/kit";
 
@@ -62,5 +64,42 @@ export const actions: Actions = {
       return fail(500, { message: "Unable to save permissions. Try again." });
     }
     return { success: true };
+  },
+  identity: async ({ request, locals }) => {
+    if (locals.user?.role !== "admin") {
+      error(403, "Admin access required");
+    }
+    const form = await request.formData();
+    const userId = Number(form.get("userId"));
+    const workspace = String(form.get("workspace") ?? "").trim();
+    const slackUserId = String(form.get("slackUserId") ?? "").trim();
+    const draft = { slackUserId, userId, workspace };
+    if (
+      !Number.isSafeInteger(userId) ||
+      userId <= 0 ||
+      ((workspace || slackUserId) &&
+        !validSlackIdentity(workspace, slackUserId))
+    ) {
+      return fail(400, {
+        ...draft,
+        message:
+          "Enter a Slack workspace ID starting with T and member ID starting with U or W, or clear both to unlink.",
+      });
+    }
+    try {
+      if (!setSlackIdentity(userId, workspace, slackUserId)) {
+        return fail(400, {
+          ...draft,
+          message:
+            "Active staff account not found or Slack identity already linked to another account.",
+        });
+      }
+    } catch {
+      return fail(500, {
+        ...draft,
+        message: "Unable to save Slack identity. Try again.",
+      });
+    }
+    return { identitySaved: true };
   },
 };
