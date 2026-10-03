@@ -54,6 +54,10 @@ export const ensureAiAnswerSchema = (): void => {
           (status != 'sent' AND slack_ts IS NULL AND sent_at IS NULL)
         )
       );
+      CREATE TABLE IF NOT EXISTS slack_intake_events (
+        event_id TEXT PRIMARY KEY,
+        request_id INTEGER NOT NULL REFERENCES slack_requests(id)
+      );
       COMMIT;
     `);
     schemaReady = true;
