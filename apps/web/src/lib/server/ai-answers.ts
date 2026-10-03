@@ -18,7 +18,6 @@ export interface AiDelivery {
   readonly ownerName: string;
   readonly requestId: number;
   readonly sentAt: string | null;
-  readonly slackTs: string | null;
   readonly sopBody: string;
   readonly sopTitle: string;
   readonly status: AiAnswerStatus;
@@ -105,7 +104,7 @@ export const listAiDeliveries = (): readonly AiDelivery[] => {
       `SELECT ai_answers.request_id AS requestId,
         ai_answers.version_id AS versionId, ai_answers.body AS answerBody,
         ai_answers.status, ai_answers.error, ai_answers.created_at AS createdAt,
-        ai_answers.slack_ts AS slackTs, ai_answers.sent_at AS sentAt,
+         ai_answers.sent_at AS sentAt,
         slack_requests.workspace, slack_requests.channel,
         slack_requests.thread_ts AS threadTs, slack_requests.owner_id AS ownerId,
         slack_requests.owner_name AS ownerName, sop_versions.title AS sopTitle,
@@ -125,7 +124,6 @@ export const listAiDeliveries = (): readonly AiDelivery[] => {
       ownerName: String(row.ownerName),
       requestId: Number(row.requestId),
       sentAt: typeof row.sentAt === "string" ? row.sentAt : null,
-      slackTs: typeof row.slackTs === "string" ? row.slackTs : null,
       sopBody: String(row.sopBody),
       sopTitle: String(row.sopTitle),
       status: parseStatus(row.status),
