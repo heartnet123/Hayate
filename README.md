@@ -4,14 +4,14 @@
 
 An interactive help desk interface built with SvelteKit. Staff manage real Slack tickets and SOP drafts; administrators control access and approve or withdraw SOP guidance. Dashboard metrics and other configuration previews use sample data.
 
-> [!IMPORTANT] Sign-in, Roles & Permissions, Slack configuration/intake, ticket claiming, notes, official replies and SOP review are persisted. Metrics, sample Slack conversations and other settings remain examples. No AI answer generator is implemented yet.
+> [!IMPORTANT] Sign-in, Roles & Permissions, Slack configuration/intake, ticket claiming, notes, official replies, SOP review and approved-SOP Slack answers are persisted. Metrics, sample Slack conversations and other settings remain examples. Approved-SOP answers copy reviewed procedures exactly; they are not generated advice.
 
 ## Explore the demo
 
 | Route | What you can explore |
 | --- | --- |
 | `/` | Dashboard with ticket trends, categories, CSAT, AI insight examples, and recent tickets. |
-| `/slack` | Unassigned central queue from signed `/slack/events` requests, claim actions, your assigned tickets and app replies, and shared ticket history with official replies from Slack and internal notes. Sample conversations and triage below remain previews. |
+| `/slack` | Confirmed approved-SOP AI answer history, unconfirmed delivery attention, the unassigned central queue from signed `/slack/events` requests, claim actions, assigned tickets and app replies, plus shared ticket history. Sample conversations and triage below remain previews. |
 | `/sop` | Private persisted drafts, administrator approval/withdrawal, immutable approved versions and decision history. |
 | `/settings` | Admin-only: manage support agents and link staff Slack identities in Roles & Permissions; configure the Slack workspace and support channel in Slack Integration. Other tabs remain previews. |
 
@@ -37,6 +37,10 @@ Before staff messages can count as official replies, an administrator must verif
 
 To send official replies from the app, set `SLACK_BOT_TOKEN` on the server to a bot token with `chat:write` in the source channel. Only the current ticket assignee can send. A Slack rejection saves a retryable draft; transport errors or restarts during an attempt leave delivery **unconfirmed** and block repeat sends until the thread is checked manually. The page marks a reply delivered only after Slack returns a matching channel and message timestamp. The app keeps one delivery reservation per ticket; the sample conversation composer is never sent to Slack.
 
+For a new signed Slack request, the approved-SOP path removes one leading bot mention, normalizes case and whitespace, and requires the remaining text to match exactly one current approved SOP title. It sends that approved procedure snapshot verbatim, so an external AI provider is intentionally unnecessary. Draft, withdrawn, missing, non-exact, ambiguous, oversized or instruction-appended requests fall back conservatively to one unassigned central-queue ticket; the app never invents an answer.
+
+Each approved-SOP attempt persists the immutable SOP version, title and procedure, exact answer body, request owner, source workspace/channel/thread, status and UTC times. Staff see confirmed `sent` records separately from `sending`, `failed` and `uncertain` delivery attention. A missing bot token, rejection, transport uncertainty or interrupted process is never presented as success. Unconfirmed work requires checking the source thread and existing central queue; there is no automatic resend.
+
 In Slack, each new message sent after assignment by the active, linked current assignee in the ticket's original thread becomes an official reply. Multiple replies appear in the shared Support ticket history with the saved staff email, original Slack member/name, UTC source time, and body. New messages from unlinked or revoked accounts, other staff, the requester, and participants are not official replies. Slack retries do not duplicate history; reassignment and identity changes do not rewrite earlier authors or reclassify existing messages.
 
 Active support agents and admins can read and add internal notes on any ticket in the shared Support ticket history section of `/slack`. Notes include author and time, persist in the SQLite database, and never go to Slack or change the official reply. Only signed-in staff can access this section, including direct server requests; Slack requesters have no staff access.
@@ -45,7 +49,7 @@ Active support agents and admins can read and add internal notes on any ticket i
 
 At `/sop`, active staff create and edit private title/procedure drafts. Save Draft persists edits across reloads and server restarts. Only administrators can approve saved content or withdraw an active SOP; server-side checks protect direct requests too. Unsaved edits must be saved before moderation. Approval snapshots an immutable version and records administrator and UTC time; withdrawal keeps that version and decision history but removes it from eligibility. Editing a draft does not change an already-approved version. Stale edits or failed saves display an error and preserve submitted fields rather than reporting success.
 
-The server-only `listEligibleSops()` and `recordSopAnswer(ticketId, versionId, answerBody)` in `apps/web/src/lib/server/sop-answers.ts` provide an AI integration boundary, not an AI generator or delivery path. The query returns only current approved versions; recording rechecks eligibility atomically and persists the exact source version with the answer. Future callers must expose an answer only after recording succeeds. Superseded or withdrawn versions cannot be recorded for new answers; earlier answers retain immutable source content. No public draft endpoint, heuristic matching, embeddings or automatic Slack answers are added.
+The server-only `listEligibleSops()` and legacy `recordSopAnswer(ticketId, versionId, answerBody)` in `apps/web/src/lib/server/sop-answers.ts` remain the ticket-bound recording API. The query returns only current approved versions; legacy recording rechecks eligibility atomically and persists the exact source version with the answer. The request-bound Slack delivery path uses its separate `ai_answers` record and does not change this API. Superseded or withdrawn versions cannot be recorded for new answers; earlier answers retain immutable source content. No public draft endpoint, fuzzy matching, embeddings or generated advice is added.
 
 ## Project layout
 
