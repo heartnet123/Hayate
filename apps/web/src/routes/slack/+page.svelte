@@ -1,4 +1,6 @@
 <script lang="ts">
+	import AiAnswerHistory from '$lib/components/ai-answer-history.svelte';
+
 	let { data, form } = $props();
 	let supportChannel = $derived(data.slack?.channel ?? '#it-support');
 	let messages = $derived([
@@ -55,7 +57,9 @@
 		{/each}
 	</section>
 
-	<section class="panel ui-panel" aria-label="Central queue">
+	<AiAnswerHistory deliveries={data.aiDeliveries} />
+
+	<section id="central-queue" class="panel ui-panel" aria-label="Central queue">
 		<h2>Central Queue ({data.queue?.length ?? 0} unassigned)</h2>
 		{#if form?.message && form?.ticketId == null}<p role="alert" class="work-feedback">{form.message}</p>{/if}
 		{#if form?.success && form?.ticketId == null}<p role="status" class="work-feedback">{form.message ?? 'Ticket claimed. Your work is below.'}</p>{/if}

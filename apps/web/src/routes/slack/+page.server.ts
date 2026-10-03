@@ -1,3 +1,4 @@
+import { listAiDeliveries } from "$lib/server/ai-answers";
 import { listCentralQueue } from "$lib/server/auth";
 import { sendOfficialReply } from "$lib/server/replies";
 import {
@@ -15,6 +16,7 @@ export const load: PageServerLoad = ({ locals }) => {
     httpError(403, "Support access required");
   }
   return {
+    aiDeliveries: listAiDeliveries(),
     assigned: listAssignedTickets(locals.user.id),
     queue: listCentralQueue(),
     supportTickets: listSupportTickets(),

@@ -38,6 +38,14 @@ Existing dashboard panels use 12px gaps, 16px ticket-row padding, 8px form gaps.
 - **States:** empty/default, focus, validation error preserving body, save failure preserving body, successful submission with new entry. Native required/max-length browser validation supplements server validation.
 - **Spacing:** existing 8px form gap and 16px ticket-row padding. No new reusable component abstraction.
 
+### AI answer history
+
+- **Structure:** two read-only `.ui-panel` sections above the central queue. `AI answer history` contains confirmed `sent` deliveries only; `AI delivery attention` contains `sending`, `failed`, and `uncertain` deliveries only. Neither section includes claim, assignee, retry, or resend controls.
+- **Provenance:** every confirmed answer displays the immutable approved SOP title, version ID, procedure snapshot, full answer body, owner, source workspace/channel/thread, and persisted `sentAt` UTC value in a `<time>` element. Delivery creation time is not presented as answer time.
+- **Truthful states:** status is always written in words. In-flight and uncertain delivery says `Delivery not confirmed`; failed and uncertain rows point staff to the existing central queue without inventing recovery actions. No non-`sent` state uses answered or success language.
+- **Layout:** reuse `.ui-panel`, `.ui-badge`, `--ui-border`, `--ui-surface-subtle`, and the existing 8/12/16px scale. Body text is at least 14px, preserves whitespace, and wraps unbroken content. Rows remain one column so 375px layouts need no horizontal scrolling.
+- **Accessibility:** semantic section headings and lists expose counts and grouping without relying on color. Empty states use plain text. Read-only content has no decorative motion or hidden disclosure dependency.
+
 ## 6. Motion & Interaction
 
 ### SOP review workspace
