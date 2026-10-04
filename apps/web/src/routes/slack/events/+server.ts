@@ -45,6 +45,9 @@ export const POST: RequestHandler = async ({ request }) => {
   }
   try {
     const result = ingestSlackEvent(payload);
+    if (result.pendingAiAnswer) {
+      return json(result, { status: 503 });
+    }
     if (result.deliveryRequestId === undefined) {
       return json(result, { status: "slackError" in result ? 202 : 200 });
     }

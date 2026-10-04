@@ -71,6 +71,7 @@ export const createAiSlackHarness = async ({ botToken = "xoxb-test" } = {}) => {
   const applications = [];
   let driverNumber = 0;
   let mode = "success";
+  let heldAcknowledgement;
   const mock = Bun.serve({
     async fetch(request) {
       const body = await request.json();
@@ -78,6 +79,10 @@ export const createAiSlackHarness = async ({ botToken = "xoxb-test" } = {}) => {
         authorization: request.headers.get("authorization"),
         body,
       });
+      if (heldAcknowledgement) {
+        heldAcknowledgement.received.resolve();
+        await heldAcknowledgement.release.promise;
+      }
       if (mode === "reject") {
         return Response.json({ error: "channel_not_found", ok: false });
       }
@@ -242,6 +247,16 @@ export const createAiSlackHarness = async ({ botToken = "xoxb-test" } = {}) => {
   return {
     calls,
     database: () => new DatabaseSync(databasePath),
+    holdAcknowledgement: () => {
+      heldAcknowledgement = {
+        received: Promise.withResolvers(),
+        release: Promise.withResolvers(),
+      };
+      return {
+        received: heldAcknowledgement.received.promise,
+        release: heldAcknowledgement.release.resolve,
+      };
+    },
     intake,
     runDriver,
     setMode: (value) => {
@@ -249,6 +264,7 @@ export const createAiSlackHarness = async ({ botToken = "xoxb-test" } = {}) => {
     },
     start,
     stop: async () => {
+      heldAcknowledgement?.release.resolve();
       for (const running of applications) {
         if (running.exitCode === null) {
           running.kill();

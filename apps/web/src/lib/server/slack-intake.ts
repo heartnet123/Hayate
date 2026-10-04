@@ -10,6 +10,7 @@ export interface SlackIntakeResult {
   readonly accepted: boolean;
   readonly deliveryRequestId?: number;
   readonly duplicate?: boolean;
+  readonly pendingAiAnswer?: boolean;
   readonly queued?: boolean;
   readonly slackError?: string;
 }
@@ -26,27 +27,31 @@ const queuedForRequest = (requestId: number): boolean =>
     .get(requestId) !== undefined;
 
 const classifySopConfirmation = (
-  requestId: number | undefined,
+  request: { readonly id: number } | undefined,
   message: NonNullable<ReturnType<typeof parseSlackMessage>>,
   mentioned: boolean
 ) => {
-  if (requestId === undefined) {
-    return { confirmed: false, repeated: false };
+  if (
+    request === undefined ||
+    message.messageTs === message.threadTs ||
+    !SOP_FAILURE_CONFIRMATION.test(message.body.replaceAll(/\s+/gu, " "))
+  ) {
+    return { confirmed: false, pending: false, repeated: mentioned };
   }
-  const confirmed =
-    message.messageTs !== message.threadTs &&
-    SOP_FAILURE_CONFIRMATION.test(message.body.replaceAll(/\s+/gu, " ")) &&
-    getDatabase()
-      .prepare(
-        `SELECT ai_answers.request_id FROM ai_answers
-         JOIN slack_requests ON slack_requests.id = ai_answers.request_id
-         WHERE ai_answers.request_id = ? AND slack_requests.owner_id = ?
-           AND ai_answers.status = 'sent' AND CAST(ai_answers.slack_ts AS REAL) < CAST(? AS REAL)`
-      )
-      .get(requestId, message.userId, message.messageTs) !== undefined;
+  const answer = getDatabase()
+    .prepare(
+      `SELECT ai_answers.status FROM ai_answers
+       JOIN slack_requests ON slack_requests.id = ai_answers.request_id
+       WHERE ai_answers.request_id = ? AND slack_requests.owner_id = ?
+         AND (ai_answers.status = 'sending' OR (ai_answers.status = 'sent'
+           AND CAST(ai_answers.slack_ts AS REAL) < CAST(? AS REAL)))`
+    )
+    .get(request.id, message.userId, message.messageTs);
+  const confirmed = answer?.status === "sent";
   return {
     confirmed,
-    repeated: confirmed ? queuedForRequest(requestId) : mentioned,
+    pending: answer?.status === "sending",
+    repeated: confirmed ? queuedForRequest(request.id) : mentioned,
   };
 };
 
@@ -107,11 +112,11 @@ export const ingestSlackEvent = (payload: unknown): SlackIntakeResult => {
       database.exec("COMMIT");
       return { accepted: false };
     }
-    const confirmation = classifySopConfirmation(
-      existing?.id,
-      message,
-      mentioned
-    );
+    const confirmation = classifySopConfirmation(existing, message, mentioned);
+    if (confirmation.pending) {
+      database.exec("COMMIT");
+      return { accepted: false, pendingAiAnswer: true };
+    }
     if (existing && !officialAssignee && confirmation.repeated) {
       database
         .prepare(

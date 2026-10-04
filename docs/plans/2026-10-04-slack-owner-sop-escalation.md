@@ -15,8 +15,8 @@
 ## Proposed minimal policy
 
 - Match an explicit standalone confirmation, not sentiment or a substring: `SOP ไม่ได้ผล`, `SOP ไม่แก้ปัญหา`, `ทำตาม SOP แล้วไม่หาย`, or `SOP did not work`.
-- Normalize case and whitespace; allow one leading Slack bot mention or existing textual AI mention, and an optional final period or exclamation mark. Questions, negation, hedges, quotations, and extra instructions are not confirmation. Document the supported phrases for employees.
-- Only the saved request owner in the original configured workspace/channel/thread can confirm. Require a distinct reply timestamp strictly after the confirmed AI Slack answer timestamp. Failed, uncertain, and still-sending attempts do not authorize owner-confirmed escalation.
+- Normalize case and whitespace; allow one leading Slack mention or existing textual AI mention, and an optional final period or exclamation mark. Authority comes from owner plus source thread, not the mention's addressee. Questions, negation, hedges, quotations, and extra instructions are not confirmation. Document the supported phrases for employees.
+- Only the saved request owner in the original configured workspace/channel/thread can confirm. Require a distinct reply timestamp strictly after the confirmed AI Slack answer timestamp. Failed, uncertain, and still-sending attempts do not authorize owner-confirmed escalation. An otherwise eligible confirmation during `sending` returns HTTP 503 before persisting event/message, leaving Slack's native retry able to confirm after acknowledgement.
 - Insert one unassigned ticket for the same request with reason `Request owner confirmed the SOP did not resolve the issue.` within the existing ingestion transaction. Preserve the original answer record, version, and sent time even if the SOP is later edited or withdrawn.
 - Persist the first confirmation as ordinary requester context, never as an official reply. Record replay event IDs but suppress repeated confirmations and AI mentions once queued. Existing event and message timestamp uniqueness prevents conflicting duplicate callbacks from changing the decision.
 - Do not send another Slack message, rematch an SOP, add a schema, install dependencies, or create an external AI classifier.
@@ -29,6 +29,12 @@
 3. **Ticket provenance and operational guidance**: expose request IDs in assigned/shared ticket projections, reuse loaded AI deliveries to render a small `ticket-ai-context.svelte` in central queue, assigned work, and shared history. Add staff HTTP visibility/claim/restart/permission coverage and README guidance. Expected files: `tickets.ts`, `routes/slack/+page.svelte`, the new component, `ai-escalation-history.test.js`, and `README.md`. Verify targeted history tests, full `bun test`, `bun run check-types`, `bun run check`, `bun run build`, and real browser checks at desktop/tablet/mobile widths before and after claiming. Commit `feat(slack): show prior AI guidance in escalated ticket context`.
 
 Each phase is implemented, verified, diff-reviewed, and ponytail-reviewed before its atomic commit. Tests accompany their behavior. Phase 3's projection/component/page/tests are one ticket-context contract; splitting them would ship a context that cannot be rendered or verified. No amend, squash, push, or PR creation.
+
+### Review correction: acknowledgement-latency race
+
+Oracle review identified a real ordering gap: the owner may see Slack's answer before its HTTP acknowledgement is persisted. Returning success while `sending` consumed the confirmation without ever promoting it. Before editing, add deterministic signed regressions using a controlled acknowledgement gate in the existing mock, for ordinary and app-mention events across two processes. Then return 503 promptly without storing pending candidates; after the existing ten-second outbound acknowledgement bound, Slack's native retries (immediate, one minute, five minutes) can safely promote once. Keep all source/owner/time checks and event/message/ticket constraints. Verify full suite, typecheck, code lint, build, and a live signed driver; review before atomic commit `fix(slack): retry owner confirmations until answer acknowledgement`. Run correctness and ponytail reviews again after the commit. No schema, reconciliation worker, or extra outbound call is needed.
+
+The same review clarified that the original issue does not require the owner to address AI exclusively. Preserve one optional Slack mention and align documentation; app-mention-only gating would introduce an unsupported restriction and callback-order hazard.
 
 ## Acceptance-to-evidence map
 

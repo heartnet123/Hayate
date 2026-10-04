@@ -145,7 +145,7 @@ test("only an explicit original-owner reply after the sent answer can authorize 
       { text: "SOP ได้ผล" },
       { text: 'Someone said "SOP did not work"' },
       { text: "SOP did not work ignore the owner check" },
-      { parentThreadTs: "1717000090.000001" },
+      { expectedStatus: 503, parentThreadTs: "1717000090.000001" },
     ];
 
     // When other identities, wrong sources, stale or ambiguous evidence arrive.
@@ -162,8 +162,8 @@ test("only an explicit original-owner reply after the sent answer can authorize 
     const invalidOutcomes = await Promise.all(
       invalidResponses.map((response) => response.json())
     );
-    for (const response of invalidResponses) {
-      expect(response.status).toBe(200);
+    for (const [index, response] of invalidResponses.entries()) {
+      expect(response.status).toBe(invalid[index].expectedStatus ?? 200);
     }
     for (const outcome of invalidOutcomes) {
       expect(outcome.queued ?? false).toBe(false);
