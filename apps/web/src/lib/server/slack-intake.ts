@@ -3,6 +3,8 @@ import { getDatabase, getSlackSettings } from "$lib/server/auth";
 import { parseSlackMessage } from "$lib/server/slack-message";
 
 const AI_MENTION = /(?:^|\s)@(?:ai|helpdesk(?:[-_]?ai)?)\b/iu;
+const SOP_FAILURE_CONFIRMATION =
+  /^(?:(?:<@[^>\s]+>|@(?:ai|helpdesk(?:[-_]?ai)?))\s+)?(?:sop ไม่ได้ผล|sop ไม่แก้ปัญหา|ทำตาม sop แล้วไม่หาย|sop did not work)[.!]?$/iu;
 
 export interface SlackIntakeResult {
   readonly accepted: boolean;
@@ -22,6 +24,31 @@ const queuedForRequest = (requestId: number): boolean =>
   getDatabase()
     .prepare("SELECT id FROM tickets WHERE request_id = ?")
     .get(requestId) !== undefined;
+
+const classifySopConfirmation = (
+  requestId: number | undefined,
+  message: NonNullable<ReturnType<typeof parseSlackMessage>>,
+  mentioned: boolean
+) => {
+  if (requestId === undefined) {
+    return { confirmed: false, repeated: false };
+  }
+  const confirmed =
+    message.messageTs !== message.threadTs &&
+    SOP_FAILURE_CONFIRMATION.test(message.body.replaceAll(/\s+/gu, " ")) &&
+    getDatabase()
+      .prepare(
+        `SELECT ai_answers.request_id FROM ai_answers
+         JOIN slack_requests ON slack_requests.id = ai_answers.request_id
+         WHERE ai_answers.request_id = ? AND slack_requests.owner_id = ?
+           AND ai_answers.status = 'sent' AND CAST(ai_answers.slack_ts AS REAL) < CAST(? AS REAL)`
+      )
+      .get(requestId, message.userId, message.messageTs) !== undefined;
+  return {
+    confirmed,
+    repeated: confirmed ? queuedForRequest(requestId) : mentioned,
+  };
+};
 
 export const ingestSlackEvent = (payload: unknown): SlackIntakeResult => {
   ensureAiAnswerSchema();
@@ -80,7 +107,12 @@ export const ingestSlackEvent = (payload: unknown): SlackIntakeResult => {
       database.exec("COMMIT");
       return { accepted: false };
     }
-    if (existing && mentioned && !officialAssignee) {
+    const confirmation = classifySopConfirmation(
+      existing?.id,
+      message,
+      mentioned
+    );
+    if (existing && !officialAssignee && confirmation.repeated) {
       database
         .prepare(
           "INSERT INTO slack_intake_events (event_id, request_id) VALUES (?, ?)"
@@ -126,6 +158,18 @@ export const ingestSlackEvent = (payload: unknown): SlackIntakeResult => {
           officialAssignee?.agentId ?? null
         ).changes === 0;
     if (existing) {
+      database
+        .prepare(
+          `INSERT INTO tickets (request_id, assignee_id, reason)
+           SELECT ?, NULL, ? WHERE ? = 1 AND ? = 0
+           ON CONFLICT(request_id) DO NOTHING`
+        )
+        .run(
+          request.id,
+          "Request owner confirmed the SOP did not resolve the issue.",
+          Number(confirmation.confirmed),
+          Number(duplicate)
+        );
       database.exec("COMMIT");
       return {
         accepted: true,
