@@ -43,6 +43,7 @@ export const ensureAiAnswerSchema = (): void => {
         body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND ${MAX_ANSWER_BODY_LENGTH}),
         status TEXT NOT NULL CHECK (status IN ('sending', 'failed', 'uncertain', 'sent')),
         error TEXT NOT NULL DEFAULT '',
+        dispatch_claimed_at TEXT,
         created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
         slack_ts TEXT,
         sent_at TEXT,
@@ -57,8 +58,20 @@ export const ensureAiAnswerSchema = (): void => {
         event_id TEXT PRIMARY KEY,
         request_id INTEGER NOT NULL REFERENCES slack_requests(id)
       );
-      COMMIT;
     `);
+    if (
+      !database
+        .prepare("PRAGMA table_info(ai_answers)")
+        .all()
+        .some((column) => column.name === "dispatch_claimed_at")
+    ) {
+      // Legacy sending rows may already have reached Slack; never make them retryable.
+      database.exec(`
+        ALTER TABLE ai_answers ADD COLUMN dispatch_claimed_at TEXT;
+        UPDATE ai_answers SET dispatch_claimed_at = created_at WHERE status = 'sending';
+      `);
+    }
+    database.exec("COMMIT");
     schemaReady = true;
   } catch (error) {
     database.exec("ROLLBACK");

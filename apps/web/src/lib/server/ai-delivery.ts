@@ -1,4 +1,4 @@
-import { matchApprovedSop } from "$lib/server/ai-answers";
+import { ensureAiAnswerSchema, matchApprovedSop } from "$lib/server/ai-answers";
 import { getDatabase } from "$lib/server/auth";
 
 const KNOWN_REJECTIONS = new Set([
@@ -123,8 +123,18 @@ const readAcknowledgement = async (
 export const deliverAiAnswer = async (
   requestId: number
 ): Promise<DeliveryResult> => {
+  ensureAiAnswerSchema();
   const answer = reservedAnswer(requestId);
   if (answer === null || answer.status !== "sending") {
+    return { queued: false, status: "uncertain" };
+  }
+  // ponytail: durable one-shot claim; no automatic lease expiry without Slack reconciliation.
+  const claimed = getDatabase()
+    .prepare(
+      "UPDATE ai_answers SET dispatch_claimed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE request_id = ? AND status = 'sending' AND dispatch_claimed_at IS NULL"
+    )
+    .run(requestId);
+  if (claimed.changes !== 1) {
     return { queued: false, status: "uncertain" };
   }
   const eligible = matchApprovedSop(answer.initialBody);
