@@ -53,6 +53,7 @@ export const listAssignedTickets = (agentId: number) => {
     })),
     ownerName: String(row.ownerName),
     reason: String(row.reason),
+    requestId: Number(row.requestId),
     slackTs: typeof row.slackTs === "string" ? row.slackTs : "",
     threadTs: String(row.threadTs),
     workspace: String(row.workspace),
@@ -77,7 +78,8 @@ export const listSupportTickets = () => {
   `);
   return db
     .prepare(`
-      SELECT tickets.id, tickets.reason, slack_requests.owner_name AS ownerName
+      SELECT tickets.id, tickets.request_id AS requestId, tickets.reason,
+        slack_requests.owner_name AS ownerName
       FROM tickets JOIN slack_requests ON slack_requests.id = tickets.request_id
       ORDER BY tickets.id DESC
     `)
@@ -100,6 +102,7 @@ export const listSupportTickets = () => {
       })),
       ownerName: String(ticket.ownerName),
       reason: String(ticket.reason),
+      requestId: Number(ticket.requestId),
     }));
 };
 

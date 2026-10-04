@@ -46,6 +46,12 @@ Existing dashboard panels use 12px gaps, 16px ticket-row padding, 8px form gaps.
 - **Layout:** reuse `.ui-panel`, `.ui-badge`, `--ui-border`, `--ui-surface-subtle`, and the existing 8/12/16px scale. Body text is at least 14px, preserves whitespace, and wraps unbroken content. Rows remain one column so 375px layouts need no horizontal scrolling.
 - **Accessibility:** semantic section headings and lists expose counts and grouping without relying on color. Empty states use plain text. Read-only content has no decorative motion or hidden disclosure dependency.
 
+### Prior AI guidance in ticket context
+
+- **Structure:** read-only `ticket-ai-context.svelte` inside central-queue, assigned-ticket, and shared-history articles, joined by request ID rather than ticket ID. Its accessible aside is labelled `Prior AI guidance`; visible copy says this is not an official reply.
+- **Provenance:** display the immutable SOP title/version, exact sent answer and persisted UTC answer time. Only confirmed `sent` records render; no draft content, new delivery status, or resend control is introduced.
+- **Layout:** reuse existing text/muted tokens, 14px body, 4/12px spacing and long-text wrapping. Preserve procedure whitespace. Plain inline context, no nested decorative card or motion.
+
 ## 6. Motion & Interaction
 
 ### SOP review workspace

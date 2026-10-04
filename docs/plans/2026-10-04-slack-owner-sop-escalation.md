@@ -2,7 +2,8 @@
 
 ## Delivery contract and repository evidence
 
-- Base: freshly fetched `origin/main` at `92b6906`; branch `feat/slack-owner-sop-escalation`.
+- Base: freshly fetched `origin/main` at `92b6906`; final branch `feat/slack-sop-failure-handoff`.
+- Branch isolation adjustment: concurrent external commits `adff816` and `a546b1e` appeared on the original `feat/slack-owner-sop-escalation` after phase 2. Continue from our verified phase-2 tip `73c5e2e` on the new intent-named branch, retaining our three planned commits and excluding both unrelated commits. The original branch/history is preserved; no rewrite or push is performed by this implementation.
 - Protected pre-existing changes: `.mcp.json` and untracked `docs/superpowers/`. Never stage or edit these paths.
 - Dependency #9 is closed and its approved-answer implementation is merged. Issue #10 has no open blockers.
 - Observed: `slack-intake.ts:129` serializes ingestion with `BEGIN IMMEDIATE`; `auth.ts:81`, `auth.ts:92`, and `auth.ts:96` enforce one request per source thread, one stored message per source timestamp, and one ticket per request.

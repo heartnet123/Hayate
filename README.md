@@ -45,6 +45,14 @@ In Slack, each new message sent after assignment by the active, linked current a
 
 Active support agents and admins can read and add internal notes on any ticket in the shared Support ticket history section of `/slack`. Notes include author and time, persist in the SQLite database, and never go to Slack or change the official reply. Only signed-in staff can access this section, including direct server requests; Slack requesters have no staff access.
 
+## Owner-confirmed SOP handoff
+
+After a confirmed AI answer, the original request owner can reply in that same Slack thread with `SOP ไม่ได้ผล`, `SOP ไม่แก้ปัญหา`, `ทำตาม SOP แล้วไม่หาย`, or `SOP did not work`. Case and whitespace are normalized; one leading bot/AI mention and a final period or exclamation mark are optional. These are explicit confirmation phrases, not a natural-language classifier. Questions, uncertain wording, quotations, negation, and extra instructions do not authorize a handoff. Other participants, other source threads, and messages sent before the AI answer cannot confirm on the owner's behalf.
+
+A valid confirmation promotes the original request into one unassigned central-queue ticket with the reason that the owner confirmed the SOP did not resolve the issue. Concurrent confirmations, repeated mentions, and Slack retries never duplicate that ticket or its confirmation message. No additional Slack answer or acknowledgement is sent. A failed database insertion rolls back the confirmation event and message so Slack can retry safely; persisted decisions survive server restarts.
+
+Staff see the prior immutable SOP title/version, exact AI answer, and UTC answer time inside the central queue before claiming, their assigned work, and shared ticket history. This guidance stays labelled **not an official reply**. Later draft edits or withdrawal do not replace the guidance originally sent, and AI answers never enter official staff reply history.
+
 ## SOP review
 
 At `/sop`, active staff create and edit private title/procedure drafts. Save Draft persists edits across reloads and server restarts. Only administrators can approve saved content or withdraw an active SOP; server-side checks protect direct requests too. Unsaved edits must be saved before moderation. Approval snapshots an immutable version and records administrator and UTC time; withdrawal keeps that version and decision history but removes it from eligibility. Editing a draft does not change an already-approved version. Stale edits or failed saves display an error and preserve submitted fields rather than reporting success.
