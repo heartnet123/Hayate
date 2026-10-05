@@ -60,6 +60,7 @@ temp
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
 .*/
+!/.github/
 
 # Local-only files — keep untracked
 .zcodeignore
