@@ -1,5 +1,6 @@
 <script lang="ts">
 	import AiAnswerHistory from '$lib/components/ai-answer-history.svelte';
+	import TicketAiContext from '$lib/components/ticket-ai-context.svelte';
 
 	let { data, form } = $props();
 	let supportChannel = $derived(data.slack?.channel ?? '#it-support');
@@ -68,6 +69,7 @@
 				<article class="work-item">
 					<p><strong>Ticket #{item.id}</strong> · Unassigned · Owner: {item.ownerName} ({item.ownerId}) · Source thread: {item.workspace} {item.channel} {item.threadTs}</p>
 					<p>Escalation reason: {item.reason}</p>
+					<TicketAiContext delivery={data.aiDeliveries.find((delivery) => delivery.requestId === item.requestId)} />
 					{#if item.slackError}<p role="alert">{item.slackError}</p>{/if}
 					<ul>
 						{#each item.messages as msg (msg.id)}
@@ -92,6 +94,7 @@
 				<h3>Ticket #{item.id} · {item.ownerName}</h3>
 				<p>Source thread: {item.workspace} {item.channel} {item.threadTs}</p>
 				<p>Escalation reason: {item.reason}</p>
+				<TicketAiContext delivery={data.aiDeliveries.find((delivery) => delivery.requestId === item.requestId)} />
 				<ul>
 					{#each item.messages as msg (msg.messageTs)}
 						<li><strong>{msg.userName}</strong> ({msg.messageTs}): {msg.body}</li>
@@ -129,6 +132,7 @@
 			<article class="work-item" id="ticket-{item.id}">
 				<h3>Ticket #{item.id} · {item.ownerName}</h3>
 				<p>Escalation reason: {item.reason}</p>
+				<TicketAiContext delivery={data.aiDeliveries.find((delivery) => delivery.requestId === item.requestId)} />
 				<h4>Official replies from Slack</h4>
 				{#if item.officialReplies.length}
 					<ol class="note-list" aria-label="Official Slack replies for ticket #{item.id}">
