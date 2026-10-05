@@ -70,5 +70,7 @@ temp
 /docs/plans/
 /output/
 /outputs/
+/ai-slack-test-support.js
+/ROADMAP.html
 AGENTS.md
 opencode.json
