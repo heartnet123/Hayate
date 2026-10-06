@@ -138,11 +138,157 @@ test("approved first requests send one immutable SOP answer while replays and fo
   }
 }, 30_000);
 
-test("draft withdrawn unmatched ambiguous and injected first requests queue without outbound answers", async () => {
+test("signed fallback races keep one original-thread notice and roll back failed reservations", async () => {
   const harness = await createAiSlackHarness();
+  const db = harness.database();
+  try {
+    const first = await harness.start();
+    const second = await harness.start();
+    const acknowledgement = harness.holdAcknowledgement();
+    const input = {
+      eventId: "Ev-fallback-race",
+      parentThreadTs: "1722000000.000001",
+      text: "@ai Unknown request",
+      threadTs: "1722000001.000001",
+      type: "message",
+    };
+    const sending = harness.intake(first.address, input);
+    await acknowledgement.received;
+    expect(
+      db
+        .prepare(
+          "SELECT status, dispatch_claimed_at, slack_ts, sent_at FROM slack_fallback_deliveries"
+        )
+        .get()
+    ).toEqual({
+      dispatch_claimed_at: expect.any(String),
+      sent_at: null,
+      slack_ts: null,
+      status: "sending",
+    });
+    const replays = await Promise.all([
+      harness.intake(second.address, input),
+      harness.intake(second.address, {
+        ...input,
+        eventId: "Ev-new-id-same-time",
+      }),
+      harness.intake(second.address, {
+        ...input,
+        eventId: "Ev-repeat-mention",
+        threadTs: "1722000002.000001",
+      }),
+      harness.intake(second.address, {
+        ...input,
+        parentThreadTs: "1722999998.000001",
+        threadTs: "1722999999.000001",
+      }),
+    ]);
+    expect(replays.map((response) => response.status)).toEqual([
+      200, 200, 200, 200,
+    ]);
+    expect(harness.calls).toHaveLength(1);
+    expect(harness.calls[0].body.thread_ts).toBe("1722000000.000001");
+    expect(
+      db.prepare("SELECT count(*) AS count FROM slack_requests").get().count
+    ).toBe(1);
+    expect(
+      db.prepare("SELECT count(*) AS count FROM slack_messages").get().count
+    ).toBe(1);
+    expect(
+      db.prepare("SELECT count(*) AS count FROM tickets").get().count
+    ).toBe(1);
+    db.prepare("UPDATE tickets SET assignee_id = 1 WHERE id = 1").run();
+    acknowledgement.release();
+    const sentResponse = await sending;
+    expect(sentResponse.status).toBe(200);
+    expect(
+      db.prepare("SELECT assignee_id, slack_error FROM tickets").get()
+    ).toEqual({ assignee_id: 1, slack_error: "" });
+    first.running.kill();
+    await first.running.exited;
+    const restarted = await harness.start();
+    await harness.intake(restarted.address, input);
+    expect(harness.calls).toHaveLength(1);
+
+    db.exec(`CREATE TRIGGER reject_fallback_reservation BEFORE INSERT ON slack_fallback_deliveries
+      BEGIN SELECT RAISE(ABORT, 'reservation failure'); END;`);
+    const failedInput = {
+      eventId: "Ev-reservation-rollback",
+      text: "Unmatched request",
+      threadTs: "1722000010.000001",
+    };
+    const failedResponse = await harness.intake(second.address, failedInput);
+    expect(failedResponse.status).toBe(500);
+    expect(
+      db.prepare("SELECT count(*) AS count FROM slack_requests").get().count
+    ).toBe(1);
+    expect(
+      db.prepare("SELECT count(*) AS count FROM slack_messages").get().count
+    ).toBe(1);
+    expect(
+      db.prepare("SELECT count(*) AS count FROM tickets").get().count
+    ).toBe(1);
+    expect(
+      db
+        .prepare("SELECT event_id FROM slack_intake_events WHERE event_id = ?")
+        .get(failedInput.eventId)
+    ).toBeUndefined();
+    expect(harness.calls).toHaveLength(1);
+    db.exec("DROP TRIGGER reject_fallback_reservation");
+    const retryResponse = await harness.intake(second.address, failedInput);
+    expect(retryResponse.status).toBe(200);
+    expect(harness.calls).toHaveLength(2);
+    expect(
+      db.prepare("SELECT count(*) AS count FROM tickets").get().count
+    ).toBe(2);
+
+    const invalid = await Promise.all([
+      harness.intake(second.address, {
+        ...failedInput,
+        signature: "v0=invalid",
+      }),
+      harness.intake(second.address, { ...failedInput, timestamp: "1" }),
+      harness.intake(second.address, { ...failedInput, rawBody: "not JSON" }),
+      harness.intake(second.address, {
+        ...failedInput,
+        event: { bot_id: "B123" },
+        eventId: "Ev-bot",
+      }),
+      harness.intake(second.address, {
+        ...failedInput,
+        channel: "C-WRONG",
+        eventId: "Ev-wrong-channel",
+      }),
+      harness.intake(second.address, {
+        ...failedInput,
+        eventId: "Ev-wrong-team",
+        workspace: "T-WRONG",
+      }),
+      harness.intake(second.address, {
+        ...failedInput,
+        eventId: "Ev-no-mention",
+        threadTs: "1722000099.000001",
+        type: "message",
+      }),
+    ]);
+    expect(invalid.map((response) => response.status)).toEqual([
+      401, 401, 400, 200, 200, 200, 200,
+    ]);
+    expect(harness.calls).toHaveLength(2);
+    expect(
+      db.prepare("SELECT count(*) AS count FROM slack_requests").get().count
+    ).toBe(2);
+  } finally {
+    db.close();
+    await harness.stop();
+  }
+}, 40_000);
+
+test("draft withdrawn unmatched ambiguous and injected requests send only fixed fallback notices", async () => {
+  const harness = await createAiSlackHarness();
+  const db = harness.database();
   try {
     const { address } = await harness.start();
-    const db = harness.database();
     db.exec(`
       INSERT INTO sops (id, title, body, status, created_by, updated_by)
         VALUES (400, 'Reset Password', 'Duplicate oversized procedure', 'active', 1, 1);
@@ -169,7 +315,49 @@ test("draft withdrawn unmatched ambiguous and injected first requests queue with
     expect(responses.map((response) => response.status)).toEqual([
       200, 200, 200, 200, 200,
     ]);
-    expect(harness.calls).toHaveLength(0);
+    expect(harness.calls).toHaveLength(cases.length);
+    for (const call of harness.calls) {
+      expect(call.authorization).toBe("Bearer xoxb-test");
+      expect(call.body).toEqual({
+        channel: "C123ABC456",
+        mrkdwn: false,
+        parse: "none",
+        text: "AI ยังตอบไม่ได้ เพราะไม่มี SOP ที่อนุมัติและเหมาะสมกับคำขอนี้ ส่งต่อเรื่องให้เจ้าหน้าที่ในคิวกลางแล้ว",
+        thread_ts: expect.stringMatching(/^171200000\d\.000001$/u),
+        unfurl_links: false,
+        unfurl_media: false,
+      });
+    }
+    expect(
+      await Promise.all(responses.map((response) => response.json()))
+    ).toEqual(
+      cases.map(() => ({ accepted: true, duplicate: false, queued: true }))
+    );
+    expect(
+      db
+        .prepare(
+          "SELECT status, error, slack_ts, sent_at, dispatch_claimed_at FROM slack_fallback_deliveries"
+        )
+        .all()
+    ).toEqual(
+      cases.map(() => ({
+        dispatch_claimed_at: expect.any(String),
+        error: "",
+        sent_at: expect.any(String),
+        slack_ts: "1719999999.000001",
+        status: "sent",
+      }))
+    );
+    expect(
+      db.prepare("SELECT count(*) AS count FROM official_replies").get().count
+    ).toBe(0);
+    expect(
+      db
+        .prepare(
+          "SELECT count(*) AS count FROM tickets WHERE slack_error <> ''"
+        )
+        .get().count
+    ).toBe(0);
     expect(
       db.prepare("SELECT count(*) AS count FROM ai_answers").get().count
     ).toBe(0);
@@ -189,8 +377,8 @@ test("draft withdrawn unmatched ambiguous and injected first requests queue with
       { count: 1, request_id: 4 },
       { count: 1, request_id: 5 },
     ]);
-    db.close();
   } finally {
+    db.close();
     await harness.stop();
   }
 }, 30_000);

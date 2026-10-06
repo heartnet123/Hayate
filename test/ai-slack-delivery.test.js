@@ -3,6 +3,7 @@ import { expect, test } from "bun:test";
 import {
   aiDeliveryModuleUrl,
   createAiSlackHarness,
+  slackIntakeModuleUrl,
 } from "./ai-slack-test-support.js";
 
 test("delivery failures stay non-success and interrupted or withdrawn reservations never send", async () => {
@@ -386,8 +387,251 @@ test("missing Slack bot token fails once and queues staff review", async () => {
     expect(
       db.prepare("SELECT count(*) AS count FROM tickets").get().count
     ).toBe(1);
+    const fallback = await harness.intake(address, {
+      eventId: "Ev-fallback-missing-token",
+      text: "Unknown request",
+      threadTs: "1714000001.000001",
+    });
+    expect(fallback.status).toBe(202);
+    expect(
+      db
+        .prepare(
+          "SELECT status, error, slack_ts, sent_at FROM slack_fallback_deliveries"
+        )
+        .get()
+    ).toEqual({
+      error: "Slack bot token not configured.",
+      sent_at: null,
+      slack_ts: null,
+      status: "failed",
+    });
+    expect(
+      db.prepare("SELECT count(*) AS count FROM tickets").get().count
+    ).toBe(2);
+    expect(harness.calls).toHaveLength(0);
     db.close();
   } finally {
     await harness.stop();
   }
 }, 30_000);
+
+test("fallback rejection and uncertain acknowledgements retain tickets without automatic retries", async () => {
+  const harness = await createAiSlackHarness();
+  const db = harness.database();
+  try {
+    const { address } = await harness.start();
+    let sequence = 0;
+    const verify = async (mode, status) => {
+      sequence += 1;
+      harness.setMode(mode);
+      const input = {
+        eventId: `Ev-fallback-${mode}`,
+        text: "Private unmatched body",
+        threadTs: `172000000${sequence}.000001`,
+      };
+      const response = await harness.intake(address, input);
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({
+        accepted: true,
+        duplicate: false,
+        queued: true,
+      });
+      const row = db
+        .prepare(`SELECT d.status, d.error, d.slack_ts, d.sent_at, d.dispatch_claimed_at,
+        tickets.slack_error FROM slack_fallback_deliveries d
+        JOIN tickets ON tickets.id = d.ticket_id
+        JOIN slack_requests r ON r.id = tickets.request_id WHERE r.thread_ts = ?`)
+        .get(input.threadTs);
+      expect(row).toMatchObject({
+        dispatch_claimed_at: expect.any(String),
+        sent_at: null,
+        slack_ts: null,
+        status,
+      });
+      expect(row.error).toBe(row.slack_error);
+      expect(row.error).not.toContain("Private unmatched body");
+      expect(row.error).not.toContain("new_unknown_code");
+      expect(row.error).not.toContain("xoxb-test");
+      const calls = harness.calls.length;
+      harness.setMode("success");
+      const replay = await harness.intake(address, input);
+      expect(replay.status).toBe(200);
+      expect(harness.calls).toHaveLength(calls);
+    };
+    await verify("reject", "failed");
+    await verify("rate", "failed");
+    await verify("unknown", "uncertain");
+    await verify("http_error", "uncertain");
+    await verify("malformed", "uncertain");
+    await verify("wrong_channel", "uncertain");
+    await verify("bad_timestamp", "uncertain");
+    await verify("timeout", "uncertain");
+    expect(
+      db.prepare("SELECT count(*) AS count FROM tickets").get().count
+    ).toBe(8);
+    expect(
+      db.prepare("SELECT count(*) AS count FROM ai_answers").get().count
+    ).toBe(0);
+    expect(
+      db.prepare("SELECT count(*) AS count FROM official_replies").get().count
+    ).toBe(0);
+  } finally {
+    db.close();
+    await harness.stop();
+  }
+}, 40_000);
+
+test("fallback one-shot claims survive interruption and persistence failure while unclaimed replay recovers", async () => {
+  const harness = await createAiSlackHarness();
+  const db = harness.database();
+  try {
+    const { address } = await harness.start();
+    const reserve = async (eventId, threadTs) =>
+      await harness.runDriver(`
+      const { ingestSlackEvent } = await import(${JSON.stringify(slackIntakeModuleUrl)});
+      console.log(JSON.stringify(ingestSlackEvent({type:'event_callback', team_id:'T123ABC456', event_id:${JSON.stringify(eventId)},
+        event:{channel:'C123ABC456', type:'app_mention', user:'U-REQUESTER', text:'Unmatched request', ts:${JSON.stringify(threadTs)}}})));
+    `);
+    const unclaimed = await reserve("Ev-before-claim", "1721000000.000001");
+    expect(unclaimed.queued).toBe(true);
+    expect(harness.calls).toHaveLength(0);
+    const recovered = await harness.intake(address, {
+      eventId: "Ev-before-claim",
+      text: "Changed replay body",
+      threadTs: "1721999999.000001",
+    });
+    expect(recovered.status).toBe(200);
+    expect(await recovered.json()).toEqual({
+      accepted: true,
+      duplicate: true,
+      queued: true,
+    });
+    expect(harness.calls[0].body.thread_ts).toBe("1721000000.000001");
+    expect(
+      db.prepare("SELECT count(*) AS count FROM slack_requests").get().count
+    ).toBe(1);
+
+    const claimed = await reserve("Ev-after-claim", "1721000001.000001");
+    await harness.runDriver(`
+      const { deliverFallbackNotice } = await import(${JSON.stringify(aiDeliveryModuleUrl)});
+      globalThis.fetch = async () => process.exit(0);
+      await deliverFallbackNotice(${claimed.fallbackDeliveryRequestId});
+    `);
+    const blocked = await harness.intake(address, {
+      eventId: "Ev-after-claim",
+      text: "Unmatched request",
+      threadTs: "1721000001.000001",
+    });
+    expect(blocked.status).toBe(200);
+    expect(harness.calls).toHaveLength(1);
+    expect(
+      db
+        .prepare(
+          "SELECT status, dispatch_claimed_at, slack_ts, sent_at FROM slack_fallback_deliveries WHERE ticket_id = 2"
+        )
+        .get()
+    ).toEqual({
+      dispatch_claimed_at: expect.any(String),
+      sent_at: null,
+      slack_ts: null,
+      status: "sending",
+    });
+
+    const accepted = await reserve("Ev-after-acceptance", "1721000002.000001");
+    await harness.runDriver(`
+      const { deliverFallbackNotice } = await import(${JSON.stringify(aiDeliveryModuleUrl)});
+      const send = globalThis.fetch;
+      globalThis.fetch = async (...args) => { await send(...args); process.exit(0); };
+      await deliverFallbackNotice(${accepted.fallbackDeliveryRequestId});
+    `);
+    expect(harness.calls).toHaveLength(2);
+    await harness.intake(address, {
+      eventId: "Ev-after-acceptance",
+      text: "Unmatched request",
+      threadTs: "1721000002.000001",
+    });
+    expect(harness.calls).toHaveLength(2);
+    expect(
+      db
+        .prepare(
+          "SELECT status, slack_ts, sent_at FROM slack_fallback_deliveries WHERE ticket_id = 3"
+        )
+        .get()
+    ).toEqual({ sent_at: null, slack_ts: null, status: "sending" });
+
+    db.exec(`CREATE TRIGGER reject_fallback_result BEFORE UPDATE OF status ON slack_fallback_deliveries
+      WHEN NEW.ticket_id = 4 BEGIN SELECT RAISE(ABORT, 'Private provider detail'); END;`);
+    const failedSave = await harness.intake(address, {
+      eventId: "Ev-fallback-save",
+      text: "Unmatched request",
+      threadTs: "1721000003.000001",
+    });
+    expect(failedSave.status).toBe(500);
+    expect(await failedSave.text()).not.toContain("Private provider detail");
+    expect(harness.calls).toHaveLength(3);
+    expect(
+      db
+        .prepare(
+          "SELECT status, slack_ts, sent_at, dispatch_claimed_at FROM slack_fallback_deliveries WHERE ticket_id = 4"
+        )
+        .get()
+    ).toEqual({
+      dispatch_claimed_at: expect.any(String),
+      sent_at: null,
+      slack_ts: null,
+      status: "sending",
+    });
+    db.exec("DROP TRIGGER reject_fallback_result");
+    await harness.intake(address, {
+      eventId: "Ev-fallback-save",
+      text: "Unmatched request",
+      threadTs: "1721000003.000001",
+    });
+    expect(harness.calls).toHaveLength(3);
+
+    const transport = await reserve(
+      "Ev-fallback-transport",
+      "1721000004.000001"
+    );
+    const transportResult = await harness.runDriver(`
+      const { deliverFallbackNotice } = await import(${JSON.stringify(aiDeliveryModuleUrl)});
+      globalThis.fetch = async () => { throw new Error('Secret transport detail'); };
+      console.log(JSON.stringify(await deliverFallbackNotice(${transport.fallbackDeliveryRequestId})));
+    `);
+    expect(transportResult).toEqual({ queued: true, status: "uncertain" });
+    expect(
+      db
+        .prepare(
+          "SELECT error FROM slack_fallback_deliveries WHERE ticket_id = 5"
+        )
+        .get().error
+    ).not.toContain("Secret transport detail");
+    const persisted = await reserve(
+      "Ev-persisted-destination",
+      "1721000005.000001"
+    );
+    db.prepare(
+      "UPDATE slack_settings SET channel = 'C-NEW' WHERE id = 1"
+    ).run();
+    db.prepare(
+      "UPDATE tickets SET slack_error = 'Unrelated integration warning.' WHERE id = 6"
+    ).run();
+    const sent = await harness.runDriver(`
+      const { deliverFallbackNotice } = await import(${JSON.stringify(aiDeliveryModuleUrl)});
+      console.log(JSON.stringify(await deliverFallbackNotice(${persisted.fallbackDeliveryRequestId})));
+    `);
+    expect(sent).toEqual({ queued: true, status: "sent" });
+    expect(harness.calls[3].body.channel).toBe("C123ABC456");
+    expect(harness.calls[3].body.thread_ts).toBe("1721000005.000001");
+    expect(
+      db.prepare("SELECT slack_error FROM tickets WHERE id = 6").get()
+        .slack_error
+    ).toBe("Unrelated integration warning.");
+    expect(
+      db.prepare("SELECT count(*) AS count FROM tickets").get().count
+    ).toBe(6);
+  } finally {
+    db.close();
+    await harness.stop();
+  }
+}, 40_000);

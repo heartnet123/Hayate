@@ -13,28 +13,31 @@ const moduleUrl = (name) => pathToFileURL(path.join(serverRoot, name)).href;
 const intake = (address, input) => {
   const payload = {
     event: {
-      channel: "C123ABC456",
+      channel: input.channel ?? "C123ABC456",
       text: input.text,
       ts: input.messageTs ?? input.threadTs,
       type: input.type ?? "app_mention",
       user: input.user ?? "U-REQUESTER",
       user_name: input.userName ?? "Requester",
       ...(input.parentThreadTs ? { thread_ts: input.parentThreadTs } : {}),
+      ...input.event,
     },
     event_id: input.eventId,
-    team_id: "T123ABC456",
+    team_id: input.workspace ?? "T123ABC456",
     type: "event_callback",
   };
-  const body = JSON.stringify(payload);
-  const timestamp = String(Math.floor(Date.now() / 1000));
+  const body = input.rawBody ?? JSON.stringify(payload);
+  const timestamp = input.timestamp ?? String(Math.floor(Date.now() / 1000));
   return fetch(`${address}/slack/events`, {
     body,
     headers: {
       "content-type": "application/json",
       "x-slack-request-timestamp": timestamp,
-      "x-slack-signature": `v0=${createHmac("sha256", secret)
-        .update(`v0:${timestamp}:${body}`)
-        .digest("hex")}`,
+      "x-slack-signature":
+        input.signature ??
+        `v0=${createHmac("sha256", secret)
+          .update(`v0:${timestamp}:${body}`)
+          .digest("hex")}`,
     },
     method: "POST",
   });
@@ -94,6 +97,29 @@ export const createAiSlackHarness = async ({ botToken = "xoxb-test" } = {}) => {
       }
       if (mode === "invalid_ack") {
         return Response.json({ channel: "C-WRONG", ok: true, ts: "invalid" });
+      }
+      if (mode === "rate") {
+        return new Response("rate limited", { status: 429 });
+      }
+      if (mode === "malformed") {
+        return new Response("not JSON");
+      }
+      if (mode === "bad_timestamp") {
+        return Response.json({
+          channel: body.channel,
+          ok: true,
+          ts: "invalid",
+        });
+      }
+      if (mode === "wrong_channel") {
+        return Response.json({
+          channel: "C-WRONG",
+          ok: true,
+          ts: "1719999999.000001",
+        });
+      }
+      if (mode === "timeout") {
+        await delay(10_500);
       }
       if (mode === "slow") {
         await delay(150);
@@ -278,3 +304,4 @@ export const createAiSlackHarness = async ({ botToken = "xoxb-test" } = {}) => {
 };
 
 export const aiDeliveryModuleUrl = moduleUrl("ai-delivery.ts");
+export const slackIntakeModuleUrl = moduleUrl("slack-intake.ts");

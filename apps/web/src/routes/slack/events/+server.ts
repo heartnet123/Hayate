@@ -1,4 +1,7 @@
-import { deliverAiAnswer } from "$lib/server/ai-delivery";
+import {
+  deliverAiAnswer,
+  deliverFallbackNotice,
+} from "$lib/server/ai-delivery";
 import { verifySlackSignature } from "$lib/server/auth";
 import { ingestSlackEvent } from "$lib/server/slack-intake";
 import { json } from "@sveltejs/kit";
@@ -48,8 +51,21 @@ export const POST: RequestHandler = async ({ request }) => {
     if (result.pendingAiAnswer) {
       return json(result, { status: 503 });
     }
+    if (result.fallbackDeliveryRequestId !== undefined) {
+      const delivery = await deliverFallbackNotice(
+        result.fallbackDeliveryRequestId
+      );
+      return json(
+        {
+          accepted: result.accepted,
+          duplicate: result.duplicate,
+          queued: true,
+        },
+        { status: delivery.status === "sent" ? 200 : 202 }
+      );
+    }
     if (result.deliveryRequestId === undefined) {
-      return json(result, { status: "slackError" in result ? 202 : 200 });
+      return json(result);
     }
     const delivery = await deliverAiAnswer(result.deliveryRequestId);
     return json(

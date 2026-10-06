@@ -16,8 +16,12 @@ const address = `http://127.0.0.1:${port}`;
 let server;
 let server2;
 let mock;
-let mockMode = "reject";
+let mockMode = "success";
 const sent = [];
+const fallbackNotice =
+  "AI ยังตอบไม่ได้ เพราะไม่มี SOP ที่อนุมัติและเหมาะสมกับคำขอนี้ ส่งต่อเรื่องให้เจ้าหน้าที่ในคิวกลางแล้ว";
+const officialCalls = () =>
+  sent.filter((call) => call.body.text !== fallbackNotice);
 const startServer = async (atPort = port) => {
   const running = Bun.spawn(
     [
@@ -164,7 +168,7 @@ test("internal notes storage keeps author and timestamp without sending replies"
   expect(
     db.prepare("SELECT count(*) AS total FROM official_replies").get().total
   ).toBe(0);
-  expect(sent).toHaveLength(0);
+  expect(officialCalls()).toHaveLength(0);
   db.close();
 });
 
@@ -220,6 +224,16 @@ test("two agents race to claim one queued thread", async () => {
   expect(
     `${intakeResponse.status}: ${await intakeResponse.text()}`
   ).toStartWith("200:");
+  expect(sent).toHaveLength(1);
+  expect(sent[0].body).toEqual({
+    channel: "C123ABC456",
+    mrkdwn: false,
+    parse: "none",
+    text: fallbackNotice,
+    thread_ts: "1710000001.000100",
+    unfurl_links: false,
+    unfurl_media: false,
+  });
   expect(
     await status(post("/slack?/note", { body: "no access", ticketId: "1" }))
   ).toBe(401);
@@ -286,7 +300,8 @@ test("two agents race to claim one queued thread", async () => {
       .total
   ).toBe(2);
   privateDb.close();
-  expect(sent).toHaveLength(0);
+  expect(sent).toHaveLength(1);
+  expect(officialCalls()).toHaveLength(0);
   expect(await page(a)).toContain("Central Queue (1 unassigned)");
   const results = await Promise.all(
     [a, b].map((cookie) => post("/slack?/claim", { ticketId: "1" }, cookie))
@@ -306,8 +321,10 @@ test("two agents race to claim one queued thread", async () => {
       post("/slack?/reply", { body: "Owner only", ticketId: "1" }, loserCookie)
     )
   ).toBe(403);
-  expect(sent).toHaveLength(0);
+  expect(sent).toHaveLength(1);
+  expect(officialCalls()).toHaveLength(0);
 
+  mockMode = "reject";
   const failed = await post(
     "/slack?/reply",
     { body: "Official answer", ticketId: "1" },
@@ -323,12 +340,12 @@ test("two agents race to claim one queued thread", async () => {
       )
       .get()
   ).toEqual({ body: "Official answer", slack_ts: null, status: "failed" });
-  expect(sent[0].body).toMatchObject({
+  expect(officialCalls()[0].body).toMatchObject({
     channel: "C123ABC456",
     text: "Official answer",
     thread_ts: "1710000001.000100",
   });
-  expect(sent[0].authorization).toBe("Bearer xoxb-test");
+  expect(officialCalls()[0].authorization).toBe("Bearer xoxb-test");
   mockMode = "success";
   server2 = await startServer(port + 1);
   const competingSends = await Promise.all([
@@ -363,7 +380,7 @@ test("two agents race to claim one queued thread", async () => {
       )
     )
   ).toBe(409);
-  expect(sent).toHaveLength(2);
+  expect(officialCalls()).toHaveLength(2);
   expect(await page(winnerCookie)).toContain(
     "Delivered to Slack · 1710000099.000100"
   );
@@ -401,7 +418,8 @@ test("two agents race to claim one queued thread", async () => {
       )
     )
   ).toBe(409);
-  expect(sent).toHaveLength(3);
+  expect(officialCalls()).toHaveLength(3);
+  mockMode = "success";
   expect(await status(intake("1710000003.000100", "Ev-rate"))).toBe(200);
   expect(
     await status(post("/slack?/claim", { ticketId: "3" }, winnerCookie))
@@ -429,7 +447,7 @@ test("two agents race to claim one queued thread", async () => {
       )
     )
   ).toBe(200);
-  expect(sent).toHaveLength(5);
+  expect(officialCalls()).toHaveLength(5);
   expect(await status(intake("1710000004.000100", "Ev-locked"))).toBe(200);
   const owner = db
     .prepare("SELECT id FROM users WHERE email = ?")
@@ -467,7 +485,10 @@ test("two agents race to claim one queued thread", async () => {
       )
     )
   ).toBe(409);
-  expect(sent).toHaveLength(5);
+  expect(officialCalls()).toHaveLength(5);
+  expect(sent.filter((call) => call.body.text === fallbackNotice)).toHaveLength(
+    4
+  );
   const revokedEmail =
     results[0].status === 200 ? "b@example.com" : "a@example.com";
   expect(
@@ -564,7 +585,7 @@ test("signed Slack assignee replies preserve history, identity, dedupe, and priv
         )
       )
     ).toBe(200);
-    const sentBefore = sent.length;
+    const sentBefore = officialCalls().length;
     let eventClock = Date.now() / 1000;
     const deliver = async (eventId, eventOverrides = {}, options = {}) => {
       eventClock = Math.max(eventClock + 0.000001, Date.now() / 1000);
@@ -898,7 +919,7 @@ test("signed Slack assignee replies preserve history, identity, dedupe, and priv
         )
         .get(ticket.id).total
     ).toBe(0);
-    expect(sent).toHaveLength(sentBefore);
+    expect(officialCalls()).toHaveLength(sentBefore);
 
     const beforeRestartList = officialList(await page(c), durableHistory);
     expect(beforeRestartList).not.toContain("U555EEE555");
@@ -918,7 +939,7 @@ test("signed Slack assignee replies preserve history, identity, dedupe, and priv
         .prepare("SELECT body FROM internal_notes WHERE ticket_id = ?")
         .get(ticket.id)
     ).toEqual({ body: privateNote });
-    expect(sent).toHaveLength(sentBefore);
+    expect(officialCalls()).toHaveLength(sentBefore);
   } finally {
     db.close();
   }

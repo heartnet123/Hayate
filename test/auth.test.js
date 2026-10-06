@@ -35,6 +35,23 @@ const adminPassword = "secure-admin-password-2026";
 const signingSecret = "slack-signing-secret-canary";
 let server;
 let address;
+let mockMode = "success";
+const slackCalls = [];
+const slackMock = Bun.serve({
+  async fetch(request) {
+    const body = await request.json();
+    slackCalls.push(body);
+    if (mockMode === "reject") {
+      return Response.json({ error: "channel_not_found", ok: false });
+    }
+    return Response.json({
+      channel: body.channel,
+      ok: true,
+      ts: "1710000099.000100",
+    });
+  },
+  port: 0,
+});
 
 const startServer = async () => {
   const port = 10_000 + Math.floor(Math.random() * 10_000);
@@ -58,6 +75,7 @@ const startServer = async () => {
         HELPDESK_ADMIN_PASSWORD: adminPassword,
         HELPDESK_DB_PATH: databasePath,
         NODE_ENV: "test",
+        SLACK_API_URL: `http://127.0.0.1:${slackMock.port}/chat.postMessage`,
         SLACK_BOT_TOKEN: "xoxb-secret-token-canary",
         SLACK_SIGNING_SECRET: signingSecret,
       },
@@ -142,6 +160,7 @@ afterEach(async () => {
     await server.exited;
   }
   removeCanaryFiles();
+  slackMock.stop(true);
   Bun.gc(true);
   rmSync(directory, { force: true, recursive: true });
 });
@@ -749,6 +768,7 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
     )
   );
 
+  mockMode = "reject";
   const failedDelivery = await slackEvent({
     event: {
       channel: "#helpdesk-triage",
@@ -765,9 +785,16 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   });
   expect(failedDelivery.status).toBe(202);
   const failedDeliveryText = await failedDelivery.text();
-  expect(failedDeliveryText).toContain(
-    "Slack delivery failed; request queued in central queue."
-  );
+  expect(JSON.parse(failedDeliveryText)).toEqual({
+    accepted: true,
+    duplicate: false,
+    queued: true,
+  });
+  expect(slackCalls.at(-1)).toMatchObject({
+    channel: "#helpdesk-triage",
+    text: "AI ยังตอบไม่ได้ เพราะไม่มี SOP ที่อนุมัติและเหมาะสมกับคำขอนี้ ส่งต่อเรื่องให้เจ้าหน้าที่ในคิวกลางแล้ว",
+    thread_ts: "1710000020.000100",
+  });
   expect(failedDeliveryText).not.toContain("xoxb-secret-token-canary");
   expect(failedDeliveryText).not.toContain(signingSecret);
   expect(failedDeliveryText).not.toContain("Confidential payroll outage body");
@@ -793,12 +820,12 @@ test("HTTP login, permission changes, Slack settings, server enforcement, persis
   expect(queueHtml).not.toContain("another request in the same thread");
   expect(queueHtml).toContain("Owner: Emily Carter (U404)");
   expect(queueHtml).toContain(
-    "Slack delivery failed; request queued in central queue."
+    "Slack rejected fallback notification: channel_not_found"
   );
 
   const adminSlackSettings = await text(get("/settings/slack", admin.cookie));
   expect(adminSlackSettings).toContain(
-    "Slack delivery failed; request queued in central queue."
+    "Slack rejected fallback notification: channel_not_found"
   );
   expect(adminSlackSettings).not.toContain("xoxb-secret-token-canary");
   expect(adminSlackSettings).not.toContain(signingSecret);
