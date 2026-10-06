@@ -123,6 +123,32 @@ test.each([
       db = new Database(dbPath);
       expect(originalRows()).toEqual(original);
       expect(
+        db.prepare("SELECT * FROM slack_fallback_deliveries").all()
+      ).toEqual([]);
+      db.exec("PRAGMA foreign_keys = ON");
+      const reserveFallback = db.prepare(
+        "INSERT INTO slack_fallback_deliveries (ticket_id, body, status, slack_ts, sent_at) VALUES (?, ?, ?, ?, ?)"
+      );
+      for (const [ticketId, body, status, slackTs, sentAt] of [
+        [999, "Notice", "sending", null, null],
+        [22, "", "sending", null, null],
+        [22, "x".repeat(4001), "sending", null, null],
+        [22, "Notice", "invalid", null, null],
+        [22, "Notice", "sent", null, null],
+        [22, "Notice", "sent", "", "now"],
+        [22, "Notice", "sent", "1710000000.000001", null],
+        [22, "Notice", "sending", "1710000000.000001", "now"],
+      ]) {
+        expect(() =>
+          reserveFallback.run(ticketId, body, status, slackTs, sentAt)
+        ).toThrow();
+      }
+      reserveFallback.run(22, "Notice", "sending", null, null);
+      expect(() =>
+        reserveFallback.run(22, "Notice", "sending", null, null)
+      ).toThrow();
+      db.exec("DELETE FROM slack_fallback_deliveries");
+      expect(
         db
           .prepare("SELECT official_agent_id FROM slack_messages ORDER BY id")
           .all()
