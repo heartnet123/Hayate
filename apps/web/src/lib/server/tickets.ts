@@ -25,6 +25,7 @@ export const listAssignedTickets = (agentId: number) => {
   const rows = db
     .prepare(`
     SELECT tickets.id, tickets.request_id AS requestId, tickets.reason,
+      tickets.slack_error AS slackError,
       slack_requests.workspace, slack_requests.channel,
       slack_requests.thread_ts AS threadTs, slack_requests.owner_name AS ownerName,
       official_replies.body AS draft, official_replies.status AS deliveryStatus,
@@ -54,6 +55,7 @@ export const listAssignedTickets = (agentId: number) => {
     ownerName: String(row.ownerName),
     reason: String(row.reason),
     requestId: Number(row.requestId),
+    slackError: String(row.slackError),
     slackTs: typeof row.slackTs === "string" ? row.slackTs : "",
     threadTs: String(row.threadTs),
     workspace: String(row.workspace),
@@ -79,7 +81,7 @@ export const listSupportTickets = () => {
   return db
     .prepare(`
       SELECT tickets.id, tickets.request_id AS requestId, tickets.reason,
-        slack_requests.owner_name AS ownerName
+        tickets.slack_error AS slackError, slack_requests.owner_name AS ownerName
       FROM tickets JOIN slack_requests ON slack_requests.id = tickets.request_id
       ORDER BY tickets.id DESC
     `)
@@ -103,6 +105,7 @@ export const listSupportTickets = () => {
       ownerName: String(ticket.ownerName),
       reason: String(ticket.reason),
       requestId: Number(ticket.requestId),
+      slackError: String(ticket.slackError),
     }));
 };
 

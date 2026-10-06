@@ -95,6 +95,7 @@
 				<p>Source thread: {item.workspace} {item.channel} {item.threadTs}</p>
 				<p>Escalation reason: {item.reason}</p>
 				<TicketAiContext delivery={data.aiDeliveries.find((delivery) => delivery.requestId === item.requestId)} />
+				{#if item.slackError}<p role="alert">{item.slackError}</p>{/if}
 				<ul>
 					{#each item.messages as msg (msg.messageTs)}
 						<li><strong>{msg.userName}</strong> ({msg.messageTs}): {msg.body}</li>
@@ -133,6 +134,7 @@
 				<h3>Ticket #{item.id} · {item.ownerName}</h3>
 				<p>Escalation reason: {item.reason}</p>
 				<TicketAiContext delivery={data.aiDeliveries.find((delivery) => delivery.requestId === item.requestId)} />
+				{#if item.slackError}<p role="alert">{item.slackError}</p>{/if}
 				<h4>Official replies from Slack</h4>
 				{#if item.officialReplies.length}
 					<ol class="note-list" aria-label="Official Slack replies for ticket #{item.id}">
