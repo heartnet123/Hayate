@@ -45,6 +45,18 @@ In Slack, each new message sent after assignment by the active, linked current a
 
 Active support agents and admins can read and add internal notes on any ticket in the shared Support ticket history section of `/slack`. Notes include author and time, persist in the SQLite database, and never go to Slack or change the official reply. Only signed-in staff can access this section, including direct server requests; Slack requesters have no staff access.
 
+## No suitable SOP
+
+A new unmatched request creates one unassigned ticket, a fallback-notification reservation and an unconfirmed-delivery warning in the same SQLite transaction. After commit, the bot attempts to post this fixed notice in the request's original channel and parent thread:
+
+> AI ยังตอบไม่ได้ เพราะไม่มี SOP ที่อนุมัติและเหมาะสมกับคำขอนี้ ส่งต่อเรื่องให้เจ้าหน้าที่ในคิวกลางแล้ว
+
+The notice contains no draft procedure, requester text or guessed advice. Its body and destination are persisted; later Slack settings changes cannot redirect a reserved notice. Event retries, repeated mentions, concurrent processes and restarts do not create duplicate tickets. An unclaimed reservation can resume on replay, but a durable `dispatch_claimed_at` claim is never cleared or automatically retried, even after a known rejection. This guarantees at most one dispatch attempt, not exactly-once delivery across SQLite and Slack.
+
+The ticket survives a missing token, rejection, timeout, invalid acknowledgement or interrupted process. A fresh delivery returns HTTP 200 only after a matching Slack acknowledgement is saved; failed or unconfirmed delivery returns HTTP 202. Both return `queued: true`. Intake or result-save storage exceptions return HTTP 500 instead; a result-save failure after Slack accepts retains the ticket, claim and unconfirmed warning. A duplicate HTTP 200 acknowledges intake, not successful notification delivery. Staff warnings remain visible in the central queue, assigned work and shared ticket history after reload or restart; check the original Slack thread before replying to unconfirmed work. Fallback notices are neither approved-SOP answers nor official staff replies.
+
+Existing tickets are not backfilled, and approved-SOP delivery failures or owner-confirmed SOP handoffs do not gain an extra notice. Stop all old application processes before upgrading so old intake cannot create tickets without reservations. Keep delivery records and dispatch claims during rollback; do not clear them to force a resend.
+
 ## Owner-confirmed SOP handoff
 
 After a confirmed AI answer, the original request owner can reply in that same Slack thread with `SOP ไม่ได้ผล`, `SOP ไม่แก้ปัญหา`, `ทำตาม SOP แล้วไม่หาย`, or `SOP did not work`. Case and whitespace are normalized; one leading Slack mention or textual AI mention and a final period or exclamation mark are optional. The owner need not address AI exclusively. These are explicit confirmation phrases, not a natural-language classifier. Questions, uncertain wording, quotations, negation, and extra instructions do not authorize a handoff. Other participants, other source threads, and messages sent before the AI answer cannot confirm on the owner's behalf.
