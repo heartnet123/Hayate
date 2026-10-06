@@ -44,8 +44,28 @@ export const getDatabase = (): DatabaseSync => {
     );
   }
   const db = new DatabaseSync(process.env.HELPDESK_DB_PATH ?? "local.db");
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec("PRAGMA journal_mode = WAL");
+  const busyTimeoutMs = 5000;
+  const walRetryDelayMs = 50;
+  const walDeadline = performance.now() + busyTimeoutMs;
+  const walWait = new Int32Array(new SharedArrayBuffer(4));
+  // ponytail: retry primary/extended SQLITE_BUSY at WAL startup, not transactions.
+  for (;;) {
+    try {
+      db.exec("PRAGMA journal_mode = WAL");
+      break;
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        Number(Reflect.get(error, "errcode")) % 256 !== 5 ||
+        performance.now() >= walDeadline
+      ) {
+        db.close();
+        throw error;
+      }
+      Atomics.wait(walWait, 0, 0, walRetryDelayMs);
+    }
+  }
+  db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
   db.exec(`
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS users (

@@ -245,3 +245,62 @@ test.each([
     }
   }
 );
+
+test("cold start waits for a rollback-journal writer before enabling WAL", async () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "helpdesk-wal-startup-"));
+  const dbPath = path.join(directory, "locked.db");
+  let db = new Database(dbPath);
+  let running;
+  try {
+    db.exec(`
+      CREATE TABLE startup_probe (value TEXT NOT NULL);
+      INSERT INTO startup_probe VALUES ('original');
+      BEGIN IMMEDIATE;
+      UPDATE startup_probe SET value = 'preserved';
+    `);
+    const authUrl = pathToFileURL(
+      path.join(import.meta.dir, "../apps/web/src/lib/server/auth.ts")
+    ).href;
+    running = Bun.spawn(
+      [
+        "node",
+        "--input-type=module",
+        "--eval",
+        `import { getDatabase } from ${JSON.stringify(authUrl)}; console.log('initializing'); getDatabase().close();`,
+      ],
+      {
+        env: {
+          ...process.env,
+          HELPDESK_ADMIN_EMAIL: "admin@example.com",
+          HELPDESK_ADMIN_PASSWORD: "secure-admin-password-2026",
+          HELPDESK_DB_PATH: dbPath,
+          NODE_ENV: "test",
+        },
+        stderr: "pipe",
+        stdout: "pipe",
+      }
+    );
+    const ready = await running.stdout.getReader().read();
+    expect(new TextDecoder().decode(ready.value)).toContain("initializing");
+    await Bun.sleep(200);
+    db.exec("COMMIT");
+    const [exitCode, stderr] = await Promise.all([
+      running.exited,
+      new Response(running.stderr).text(),
+    ]);
+    expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+    db.close(true);
+    db = new Database(dbPath);
+    expect(db.prepare("PRAGMA journal_mode").get().journal_mode).toBe("wal");
+    expect(db.prepare("SELECT value FROM startup_probe").get().value).toBe(
+      "preserved"
+    );
+  } finally {
+    db.close(true);
+    if (running?.exitCode === null) {
+      running.kill();
+    }
+    await running?.exited;
+    rmSync(directory, { force: true, recursive: true });
+  }
+});
