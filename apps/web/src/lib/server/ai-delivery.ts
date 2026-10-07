@@ -120,6 +120,136 @@ const readAcknowledgement = async (
   return { error: "", ts: result.ts };
 };
 
+const persistFallbackResult = (
+  ticketId: number,
+  previousError: string,
+  status: DeliveryResult["status"],
+  error: string,
+  slackTs: string | null = null
+): DeliveryResult => {
+  const database = getDatabase();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const updated = database
+      .prepare(
+        `UPDATE slack_fallback_deliveries SET status = ?, error = ?, slack_ts = ?,
+          sent_at = CASE WHEN ? = 'sent' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE NULL END
+         WHERE ticket_id = ? AND status = 'sending'`
+      )
+      .run(status, error, slackTs, status, ticketId);
+    if (updated.changes === 1) {
+      database
+        .prepare(
+          "UPDATE tickets SET slack_error = ? WHERE id = ? AND slack_error = ?"
+        )
+        .run(error, ticketId, previousError);
+    }
+    database.exec("COMMIT");
+    return {
+      queued: true,
+      status: updated.changes === 1 ? status : "uncertain",
+    };
+  } catch (persistenceError) {
+    database.exec("ROLLBACK");
+    throw persistenceError;
+  }
+};
+
+export const deliverFallbackNotice = async (
+  requestId: number
+): Promise<DeliveryResult> => {
+  const database = getDatabase();
+  const notice = database
+    .prepare(
+      `SELECT slack_fallback_deliveries.ticket_id AS ticketId, slack_fallback_deliveries.body,
+        slack_fallback_deliveries.status, slack_fallback_deliveries.error,
+        slack_requests.channel, slack_requests.thread_ts AS threadTs
+       FROM slack_fallback_deliveries
+       JOIN tickets ON tickets.id = slack_fallback_deliveries.ticket_id
+       JOIN slack_requests ON slack_requests.id = tickets.request_id
+       WHERE tickets.request_id = ?`
+    )
+    .get(requestId);
+  if (!notice || notice.status !== "sending") {
+    return {
+      queued: true,
+      status: notice?.status === "sent" ? "sent" : "uncertain",
+    };
+  }
+  const ticketId = Number(notice.ticketId);
+  // ponytail: one durable attempt; add retries only with Slack reconciliation.
+  const claimed = database
+    .prepare(
+      `UPDATE slack_fallback_deliveries SET dispatch_claimed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE ticket_id = ? AND status = 'sending' AND dispatch_claimed_at IS NULL`
+    )
+    .run(ticketId);
+  if (claimed.changes !== 1) {
+    return { queued: true, status: "uncertain" };
+  }
+  const previousError = String(notice.error);
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) {
+    return persistFallbackResult(
+      ticketId,
+      previousError,
+      "failed",
+      "Slack bot token not configured."
+    );
+  }
+  try {
+    const response = await fetch(
+      process.env.SLACK_API_URL ?? "https://slack.com/api/chat.postMessage",
+      {
+        body: JSON.stringify({
+          channel: notice.channel,
+          mrkdwn: false,
+          parse: "none",
+          text: notice.body,
+          thread_ts: notice.threadTs,
+          unfurl_links: false,
+          unfurl_media: false,
+        }),
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        method: "POST",
+        signal: AbortSignal.timeout(10_000),
+      }
+    );
+    const acknowledgement = await readAcknowledgement(
+      response,
+      String(notice.channel)
+    );
+    if (acknowledgement !== null) {
+      if (acknowledgement.error) {
+        return persistFallbackResult(
+          ticketId,
+          previousError,
+          "failed",
+          `Slack rejected fallback notification: ${acknowledgement.error}`
+        );
+      }
+      return persistFallbackResult(
+        ticketId,
+        previousError,
+        "sent",
+        "",
+        acknowledgement.ts
+      );
+    }
+  } catch {
+    // Slack may have accepted the notice; never release its dispatch claim.
+  }
+  return persistFallbackResult(
+    ticketId,
+    previousError,
+    "uncertain",
+    "Fallback notification not confirmed; do not retry automatically."
+  );
+};
+
 export const deliverAiAnswer = async (
   requestId: number
 ): Promise<DeliveryResult> => {

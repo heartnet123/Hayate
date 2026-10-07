@@ -6,20 +6,31 @@ const AI_MENTION = /(?:^|\s)@(?:ai|helpdesk(?:[-_]?ai)?)\b/iu;
 const SOP_FAILURE_CONFIRMATION =
   /^(?:(?:<@[^>\s]+>|@(?:ai|helpdesk(?:[-_]?ai)?))\s+)?(?:sop ไม่ได้ผล|sop ไม่แก้ปัญหา|ทำตาม sop แล้วไม่หาย|sop did not work)[.!]?$/iu;
 
+const FALLBACK_NOTICE_BODY =
+  "AI ยังตอบไม่ได้ เพราะไม่มี SOP ที่อนุมัติและเหมาะสมกับคำขอนี้ ส่งต่อเรื่องให้เจ้าหน้าที่ในคิวกลางแล้ว";
+const FALLBACK_PENDING_WARNING =
+  "Fallback notification not confirmed; staff must check the Slack thread before replying.";
+
 export interface SlackIntakeResult {
   readonly accepted: boolean;
   readonly deliveryRequestId?: number;
   readonly duplicate?: boolean;
+  readonly fallbackDeliveryRequestId?: number;
   readonly pendingAiAnswer?: boolean;
   readonly queued?: boolean;
-  readonly slackError?: string;
 }
 
-const simulatedSlackError = (payload: unknown): boolean =>
-  typeof payload === "object" &&
-  payload !== null &&
-  "simulate_slack_error" in payload &&
-  payload.simulate_slack_error === true;
+const pendingFallback = (requestId: number): number | undefined =>
+  getDatabase()
+    .prepare(
+      `SELECT tickets.request_id FROM slack_fallback_deliveries
+       JOIN tickets ON tickets.id = slack_fallback_deliveries.ticket_id
+       WHERE tickets.request_id = ? AND slack_fallback_deliveries.status = 'sending'
+         AND slack_fallback_deliveries.dispatch_claimed_at IS NULL`
+    )
+    .get(requestId) === undefined
+    ? undefined
+    : requestId;
 
 const queuedForRequest = (requestId: number): boolean =>
   getDatabase()
@@ -78,6 +89,7 @@ export const ingestSlackEvent = (payload: unknown): SlackIntakeResult => {
       return {
         accepted: true,
         duplicate: true,
+        fallbackDeliveryRequestId: pendingFallback(priorEvent.requestId),
         queued: queuedForRequest(priorEvent.requestId),
       };
     }
@@ -127,6 +139,7 @@ export const ingestSlackEvent = (payload: unknown): SlackIntakeResult => {
       return {
         accepted: true,
         duplicate: true,
+        fallbackDeliveryRequestId: pendingFallback(existing.id),
         queued: queuedForRequest(existing.id),
       };
     }
@@ -179,6 +192,7 @@ export const ingestSlackEvent = (payload: unknown): SlackIntakeResult => {
       return {
         accepted: true,
         duplicate,
+        fallbackDeliveryRequestId: pendingFallback(request.id),
         queued: queuedForRequest(request.id),
       };
     }
@@ -197,20 +211,26 @@ export const ingestSlackEvent = (payload: unknown): SlackIntakeResult => {
         queued: false,
       };
     }
-    const slackError = simulatedSlackError(payload)
-      ? "Slack delivery failed; request queued in central queue."
-      : "";
+    const ticket = database
+      .prepare(
+        "INSERT INTO tickets (request_id, assignee_id, reason, slack_error) VALUES (?, NULL, ?, ?) RETURNING id"
+      )
+      .get(
+        request.id,
+        "No approved SOP matched this request.",
+        FALLBACK_PENDING_WARNING
+      ) as { id: number };
     database
       .prepare(
-        "INSERT INTO tickets (request_id, assignee_id, reason, slack_error) VALUES (?, NULL, ?, ?)"
+        "INSERT INTO slack_fallback_deliveries (ticket_id, body, status, error) VALUES (?, ?, 'sending', ?)"
       )
-      .run(request.id, "No approved SOP matched this request.", slackError);
+      .run(ticket.id, FALLBACK_NOTICE_BODY, FALLBACK_PENDING_WARNING);
     database.exec("COMMIT");
     return {
       accepted: true,
       duplicate: false,
+      fallbackDeliveryRequestId: request.id,
       queued: true,
-      ...(slackError ? { slackError } : {}),
     };
   } catch (error) {
     database.exec("ROLLBACK");

@@ -44,8 +44,28 @@ export const getDatabase = (): DatabaseSync => {
     );
   }
   const db = new DatabaseSync(process.env.HELPDESK_DB_PATH ?? "local.db");
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec("PRAGMA journal_mode = WAL");
+  const busyTimeoutMs = 5000;
+  const walRetryDelayMs = 50;
+  const walDeadline = performance.now() + busyTimeoutMs;
+  const walWait = new Int32Array(new SharedArrayBuffer(4));
+  // ponytail: retry primary/extended SQLITE_BUSY at WAL startup, not transactions.
+  for (;;) {
+    try {
+      db.exec("PRAGMA journal_mode = WAL");
+      break;
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        Number(Reflect.get(error, "errcode")) % 256 !== 5 ||
+        performance.now() >= walDeadline
+      ) {
+        db.close();
+        throw error;
+      }
+      Atomics.wait(walWait, 0, 0, walRetryDelayMs);
+    }
+  }
+  db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
   db.exec(`
     PRAGMA foreign_keys = ON;
     CREATE TABLE IF NOT EXISTS users (
@@ -98,6 +118,19 @@ export const getDatabase = (): DatabaseSync => {
       reason TEXT NOT NULL,
       slack_error TEXT NOT NULL DEFAULT '',
       assigned_at REAL
+    );
+    CREATE TABLE IF NOT EXISTS slack_fallback_deliveries (
+      ticket_id INTEGER PRIMARY KEY REFERENCES tickets(id),
+      body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 4000),
+      status TEXT NOT NULL CHECK (status IN ('sending', 'failed', 'uncertain', 'sent')),
+      error TEXT NOT NULL DEFAULT '',
+      dispatch_claimed_at TEXT,
+      slack_ts TEXT,
+      sent_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      CHECK ((status = 'sent' AND slack_ts IS NOT NULL AND length(slack_ts) > 0
+        AND sent_at IS NOT NULL AND length(sent_at) > 0)
+        OR (status <> 'sent' AND slack_ts IS NULL AND sent_at IS NULL))
     );
     CREATE TABLE IF NOT EXISTS official_replies (
       ticket_id INTEGER PRIMARY KEY REFERENCES tickets(id),

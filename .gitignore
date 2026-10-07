@@ -50,7 +50,6 @@ lerna-debug.log*
 # Testing
 coverage
 .nyc_output
-*.test.*
 
 # Misc
 *.tgz
@@ -70,7 +69,6 @@ temp
 /docs/plans/
 /output/
 /outputs/
-/ai-slack-test-support.js
 /ROADMAP.html
 AGENTS.md
 opencode.json
