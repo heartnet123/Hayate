@@ -51,12 +51,11 @@ export const actions: Actions = {
       throw error;
     }
     if (!result.claimed) {
-      return fail(409, {
-        message:
-          result.owner === null
-            ? "Ticket not found."
-            : `Ticket already claimed by agent #${result.owner}. Refresh to see current work.`,
-      });
+      return result.owner === null
+        ? fail(404, { message: "Ticket not found." })
+        : fail(409, {
+            message: `Ticket already claimed by agent #${result.owner}. Refresh to see current work.`,
+          });
     }
     return { success: true };
   },

@@ -944,3 +944,10 @@ test("signed Slack assignee replies preserve history, identity, dedupe, and priv
     db.close();
   }
 }, 30_000);
+
+test("claiming a ticket that does not exist reports 404", async () => {
+  const admin = await login("admin@example.com", password);
+  expect(
+    await status(post("/slack?/claim", { ticketId: "999999" }, admin))
+  ).toBe(404);
+}, 15_000);
