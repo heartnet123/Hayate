@@ -1,6 +1,7 @@
 <script lang="ts">
 	import AiAnswerHistory from '$lib/components/ai-answer-history.svelte';
 	import TicketAiContext from '$lib/components/ticket-ai-context.svelte';
+	import { formatSlackTime, slackTimeIso } from '$lib/slack-time';
 
 	let { data, form } = $props();
 	let supportChannel = $derived(data.slack?.channel ?? '#it-support');
@@ -67,7 +68,7 @@
 		{#if data.queue?.length}
 			{#each data.queue as item (item.id)}
 				<article class="work-item">
-					<p><strong>Ticket #{item.id}</strong> · Unassigned · Owner: {item.ownerName} ({item.ownerId}) · Source thread: {item.workspace} {item.channel} {item.threadTs}</p>
+					<p><strong>Ticket #{item.id}</strong> · Unassigned · Owner: {item.ownerName} ({item.ownerId}) · Source thread: {item.workspace} {item.channel} {item.threadTs} · Opened <time datetime={slackTimeIso(item.threadTs) || undefined}>{formatSlackTime(item.threadTs)}</time></p>
 					<p>Escalation reason: {item.reason}</p>
 					<TicketAiContext delivery={data.aiDeliveries.find((delivery) => delivery.requestId === item.requestId)} />
 					{#if item.slackError}<p role="alert">{item.slackError}</p>{/if}
@@ -92,7 +93,7 @@
 		{#each data.assigned as item (item.id)}
 			<article class="work-item">
 				<h3>Ticket #{item.id} · {item.ownerName}</h3>
-				<p>Source thread: {item.workspace} {item.channel} {item.threadTs}</p>
+				<p>Source thread: {item.workspace} {item.channel} {item.threadTs} · Opened <time datetime={slackTimeIso(item.threadTs) || undefined}>{formatSlackTime(item.threadTs)}</time></p>
 				<p>Escalation reason: {item.reason}</p>
 				<TicketAiContext delivery={data.aiDeliveries.find((delivery) => delivery.requestId === item.requestId)} />
 				{#if item.slackError}<p role="alert">{item.slackError}</p>{/if}
